@@ -13,6 +13,7 @@ import {
   Dices,
   Home,
   Pickaxe,
+  Receipt,
   ScrollText,
   Wallet,
 } from "lucide-react";
@@ -34,6 +35,7 @@ import {
   qty,
 } from "@/game/logic";
 import { useFloor } from "@/game/store";
+import { playLog, sfxStep, unlockSfx } from "@/game/sfx";
 import { useOnline, type NetSpec } from "@/game/online";
 
 function cx(...parts: Array<string | false | undefined>) {
@@ -56,6 +58,7 @@ function useNightScore() {
     a.volume = 0.62;
     audio.current = a;
     const unlock = () => {
+      unlockSfx();
       try {
         if (localStorage.getItem("coinpit-music") === "0") return;
       } catch {
@@ -114,7 +117,7 @@ export function FloorGame() {
     }
     const p = game.players[game.turn];
     if (p.human) return;
-    const wait = game.phase === "need-roll" ? 420 : game.phase === "card" ? 1100 : 760;
+    const wait = game.phase === "need-roll" || game.phase === "steal-roll" ? 420 : game.phase === "card" ? 1100 : 760;
     const t = setTimeout(() => useFloor.getState().ai(), wait);
     return () => clearTimeout(t);
   }, [game, authority]);
@@ -123,6 +126,20 @@ export function FloorGame() {
     if (!game) return;
     const tile = TILES[game.players[game.turn].pos];
     if (game.phase === "need-choice" && tile.coin) setCoin(tile.coin);
+  }, [game]);
+
+  const heard = useRef("");
+  const stepped = useRef(-1);
+  useEffect(() => {
+    if (!game) return;
+    const line = game.log[0] ?? "";
+    if (line && line !== heard.current) {
+      if (heard.current) playLog(line);
+      heard.current = line;
+    }
+    const pos = game.players[game.turn]?.pos ?? -1;
+    if (game.phase === "moving" && stepped.current !== -1 && pos !== stepped.current) sfxStep();
+    stepped.current = pos;
   }, [game]);
 
   function actRoll() {
@@ -150,7 +167,7 @@ export function FloorGame() {
       if (!g) return;
       const mine = net ? (net.host ? 0 : online.mySeat) : 0;
       if (g.turn !== mine || !g.players[g.turn].human) return;
-      if (g.phase === "need-roll") {
+      if (g.phase === "need-roll" || g.phase === "steal-roll") {
         e.preventDefault();
         actRoll();
       } else if (g.phase === "card") {
@@ -221,7 +238,7 @@ export function FloorGame() {
               起點在右下，空投在左下。每經過起點免費 20 USDT。
             </li>
             <li className="rounded-xl border border-line bg-surface px-3 py-3">
-              右上角盜錢包拿走現金 50%。擲出 6 可再擲，三連六直接過去。
+              右上角是盜錢包：停在那裡後，用一粒骰連續擲出三個 6 才能盜走 50% USDT。平時走棋擲兩粒。
             </li>
             <li className="rounded-xl border border-line bg-surface px-3 py-3">
               房子一級過路費擲一顆骰，1–6 USDT。每升一級多一顆骰。升到二級要 150 USDT，之後每級再加 150。
@@ -347,9 +364,10 @@ export function FloorGame() {
 
         {rules && (
           <section className="rounded-xl border border-line bg-surface p-4 text-sm leading-relaxed text-muted">
-            棋盤順時針走。起點在右下角，空投在左下角。經過起點免費 20 USDT。
-            冷庫、機房、天台、港口只有別人踩到才收租。一級 1–6，每級多一顆骰。升級 150 起，每級加 150。
-            右上角盜錢包拿走現金 50%。恐貪開局鎖在 50，流動性居中。淨值跌破 15 會被平倉。配樂「夜盤」可在右上角關掉。
+            棋盤 40 格，順時針。起點在右下角。經過起點免費 20 USDT。
+            房子只有別人踩到才收租，一級 1–6，每級多一顆骰。升級 150 USDT 起。
+            交稅抽走 10% USDT。盜錢包要停在該格，單骰連續三個 6 才可盜 50%。
+            恐貪越高越貪婪，開局 50。淨值跌破 15 會被平倉。配樂與音效可並存。
           </section>
         )}
 
@@ -475,7 +493,7 @@ export function FloorGame() {
 
 function Board({ game }: { game: State }) {
   return (
-    <div className="grid grid-cols-6 grid-rows-6 gap-1 aspect-square">
+    <div className="grid grid-cols-11 grid-rows-11 gap-0.5 aspect-square">
       {TILES.map((tile, index) => {
         const [col, row] = COORDS[index];
         const here = game.players.filter((p) => p.pos === index && !p.bankrupt);
@@ -500,7 +518,7 @@ function Board({ game }: { game: State }) {
                 </span>
               )}
             </div>
-            <p className="truncate text-xs leading-none text-fg">{tile.label}</p>
+            <p className="truncate text-[10px] leading-none text-fg sm:text-xs">{tile.label}</p>
             <div className="flex h-3 gap-0.5">
               {here.map((p) => (
                 <span
@@ -515,7 +533,7 @@ function Board({ game }: { game: State }) {
       })}
       <div
         className="flex flex-col justify-between rounded-xl bg-surface-2 p-2"
-        style={{ gridColumn: "2 / span 4", gridRow: "2 / span 4" }}
+        style={{ gridColumn: "2 / span 9", gridRow: "2 / span 9" }}
       >
         <div className="grid grid-cols-2 gap-2">
           <Meter
@@ -531,18 +549,25 @@ function Board({ game }: { game: State }) {
             tone="primary"
           />
         </div>
-        <div className="flex flex-1 flex-col items-center justify-center gap-1">
-          <p className="font-mono text-4xl leading-none">{game.dice > 0 ? game.dice : "–"}</p>
-          <p className="text-xs text-muted">{game.dice > 0 ? `${game.dice} 點` : "未擲"}</p>
-          <Die value={game.dice} />
+        <div className="flex flex-1 flex-col items-center justify-center gap-2">
+          <div className="flex items-center gap-3">
+            <Die value={game.faces?.[0] ?? 0} />
+            {game.phase === "steal-roll" ? (
+              <p className="max-w-24 text-center text-xs text-muted">單骰 · 已連中 {game.stealHits ?? 0}/3</p>
+            ) : (
+              <Die value={game.faces?.[1] ?? 0} />
+            )}
+          </div>
           <p className="text-center text-sm font-medium">
             {game.phase === "over"
               ? "收盤"
               : game.phase === "moving"
                 ? `${meName(game)} 移動中`
-                : `${meName(game)} 的回合`}
+                : game.phase === "steal-roll"
+                  ? `${meName(game)} 停在盜錢包`
+                  : `${meName(game)} 的回合`}
           </p>
-          <p className="text-center font-mono text-xs text-muted">順時針 · {game.sixChain > 0 ? `連六 ${game.sixChain}` : "骰子 1–6"}</p>
+          <p className="text-center font-mono text-xs text-muted">順時針 · 兩粒骰子</p>
         </div>
       </div>
     </div>
@@ -580,7 +605,7 @@ function Meter({
 
 function Die({ value }: { value: number }) {
   const pip = (on: boolean) => (
-    <span className={cx("h-1.5 w-1.5 rounded-full", on ? "bg-fg" : "bg-transparent")} />
+    <span className={cx("h-2 w-2 rounded-full", on ? "bg-[#1c140c]" : "bg-transparent")} />
   );
   const n = value || 1;
   const map: Record<number, boolean[]> = {
@@ -592,13 +617,17 @@ function Die({ value }: { value: number }) {
     6: [true, false, true, true, false, true, true, false, true],
   };
   const cells = map[n] ?? map[1];
+  const [spin, setSpin] = useState(false);
+  useEffect(() => {
+    if (!value) return;
+    setSpin(true);
+    const t = setTimeout(() => setSpin(false), 480);
+    return () => clearTimeout(t);
+  }, [value]);
   return (
     <div
-      className={cx(
-        "grid h-12 w-12 grid-cols-3 grid-rows-3 place-items-center rounded-lg border border-line bg-bg p-1",
-        value === 0 && "opacity-40",
-      )}
-      aria-label={value ? `骰子 ${value}` : "尚未擲骰"}
+      className={cx("die grid grid-cols-3 grid-rows-3 place-items-center p-1.5", spin && "die-spin", value === 0 && "opacity-35")}
+      aria-label={value ? `骰子 ${value} 點` : "尚未擲骰"}
     >
       {cells.map((on, i) => (
         <span key={i}>{pip(value !== 0 && on)}</span>
@@ -615,6 +644,7 @@ function TileIcon({ kind }: { kind: string }) {
   if (kind === "mine") return <Pickaxe className={cls} aria-hidden />;
   if (kind === "steal") return <Wallet className="h-3 w-3 text-accent" aria-hidden />;
   if (kind === "p2p") return <ArrowLeftRight className={cls} aria-hidden />;
+  if (kind === "tax") return <Receipt className="h-3 w-3 text-accent" aria-hidden />;
   if (kind === "air") return <Dices className={cls} aria-hidden />;
   return <span className="h-3 w-3" />;
 }
@@ -693,22 +723,26 @@ function Dock({
         </div>
       )}
 
-      {(game.phase === "need-roll" || game.phase === "moving") && (
+      {(game.phase === "need-roll" || game.phase === "moving" || game.phase === "steal-roll") && (
         <div>
           <p className="text-sm text-muted">
             {game.phase === "moving"
               ? "棋子在走。"
-              : human
-                ? "擲一顆骰子。6 可以再擲，三連六會被丟到盜錢包。"
-                : `${me.name} 準備擲骰。`}
+              : game.phase === "steal-roll"
+                ? human
+                  ? `停在盜錢包。擲一粒，已連續 ${game.stealHits ?? 0} 個 6。`
+                  : `${me.name} 在盜錢包擲單骰。`
+                : human
+                  ? "擲兩粒骰子，點數相加後順時針走。"
+                  : `${me.name} 準備擲骰。`}
           </p>
-          {human && game.phase === "need-roll" ? (
+          {human && (game.phase === "need-roll" || game.phase === "steal-roll") ? (
             <button
               type="button"
               onClick={onRoll}
               className="mt-3 h-12 w-full rounded-xl bg-primary font-medium text-bg"
             >
-              擲骰
+              {game.phase === "steal-roll" ? "擲一粒" : "擲兩粒"}
             </button>
           ) : (
             <p className="mt-3 font-mono text-xs text-primary">
@@ -757,7 +791,7 @@ function Roster({ game, onSteal }: { game: State; onSteal: (id: string) => void 
               <div className="h-full rounded-full bg-primary" style={{ width: `${pct}%` }} />
             </div>
             <p className="mt-2 font-mono text-xs text-muted">
-              現金 {money(p.cash)}
+              USDT {money(p.cash)}
               {p.miner ? " · 礦機" : ""}
             </p>
             <p className="font-mono text-xs text-muted">
@@ -777,7 +811,7 @@ function Roster({ game, onSteal }: { game: State; onSteal: (id: string) => void 
                 onClick={() => onSteal(`steal:${i}`)}
                 className="mt-2 h-11 w-full rounded-lg bg-accent text-sm font-medium text-bg"
               >
-                盜走現金 50%
+                盜走 50% USDT
               </button>
             )}
           </div>

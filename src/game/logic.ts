@@ -6,8 +6,8 @@ export const START_CASH = 150;
 export const STIPEND = 20;
 export const MINE_COST = 36;
 export const FEE = 0.025;
-export const BOARD = 20;
-export const STEAL_AT = 15;
+export const BOARD = 40;
+export const STEAL_AT = 30;
 export const MAX_NFT_LEVEL = 6;
 
 /** 升到下一級的價錢。一級升二級 150，之後每級再加 150。 */
@@ -49,6 +49,7 @@ export type TileKind =
   | "mine"
   | "mkt"
   | "steal"
+  | "tax"
   | "p2p";
 
 export type TileDef = {
@@ -60,53 +61,62 @@ export type TileDef = {
 
 export const TILES: TileDef[] = [
   { kind: "start", label: "起點" },
-  { kind: "spot", label: "ETH", coin: "ETH" },
-  { kind: "fund", label: "基本面" },
+  { kind: "spot", label: "BTC", coin: "BTC" },
   { kind: "nft", label: "冷庫", nft: 0 },
-  { kind: "spot", label: "BTC", coin: "BTC" },
-  { kind: "air", label: "空投" },
-  { kind: "mkt", label: "市場" },
-  { kind: "spot", label: "XRP", coin: "XRP" },
-  { kind: "nft", label: "港口", nft: 3 },
-  { kind: "spot", label: "ETH", coin: "ETH" },
-  { kind: "p2p", label: "內盤" },
-  { kind: "mkt", label: "市場" },
-  { kind: "spot", label: "BTC", coin: "BTC" },
   { kind: "fund", label: "基本面" },
-  { kind: "nft", label: "天台", nft: 2 },
-  { kind: "steal", label: "盜錢包" },
+  { kind: "spot", label: "ETH", coin: "ETH" },
   { kind: "nft", label: "機房", nft: 1 },
   { kind: "mkt", label: "市場" },
-  { kind: "mine", label: "挖礦" },
   { kind: "spot", label: "XRP", coin: "XRP" },
+  { kind: "nft", label: "天台", nft: 2 },
+  { kind: "mine", label: "挖礦" },
+  { kind: "air", label: "空投" },
+  { kind: "spot", label: "BTC", coin: "BTC" },
+  { kind: "nft", label: "港口", nft: 3 },
+  { kind: "fund", label: "基本面" },
+  { kind: "spot", label: "ETH", coin: "ETH" },
+  { kind: "nft", label: "礦機", nft: 4 },
+  { kind: "mkt", label: "市場" },
+  { kind: "spot", label: "XRP", coin: "XRP" },
+  { kind: "nft", label: "節點", nft: 5 },
+  { kind: "tax", label: "交稅" },
+  { kind: "p2p", label: "內盤" },
+  { kind: "spot", label: "BTC", coin: "BTC" },
+  { kind: "nft", label: "機櫃", nft: 6 },
+  { kind: "mkt", label: "市場" },
+  { kind: "spot", label: "ETH", coin: "ETH" },
+  { kind: "nft", label: "衛星", nft: 7 },
+  { kind: "fund", label: "基本面" },
+  { kind: "spot", label: "XRP", coin: "XRP" },
+  { kind: "nft", label: "驗證", nft: 8 },
+  { kind: "mkt", label: "市場" },
+  { kind: "steal", label: "盜錢包" },
+  { kind: "spot", label: "BTC", coin: "BTC" },
+  { kind: "nft", label: "算力", nft: 9 },
+  { kind: "mkt", label: "市場" },
+  { kind: "spot", label: "ETH", coin: "ETH" },
+  { kind: "nft", label: "閘道", nft: 10 },
+  { kind: "fund", label: "基本面" },
+  { kind: "spot", label: "XRP", coin: "XRP" },
+  { kind: "nft", label: "備援", nft: 11 },
+  { kind: "mkt", label: "市場" },
 ];
 
-/** Clockwise from the bottom-right start. Column, row are 1-indexed on a 6×6 pit. */
-export const COORDS: ReadonlyArray<readonly [number, number]> = [
-  [6, 6],
-  [5, 6],
-  [4, 6],
-  [3, 6],
-  [2, 6],
-  [1, 6],
-  [1, 5],
-  [1, 4],
-  [1, 3],
-  [1, 2],
-  [1, 1],
-  [2, 1],
-  [3, 1],
-  [4, 1],
-  [5, 1],
-  [6, 1],
-  [6, 2],
-  [6, 3],
-  [6, 4],
-  [6, 5],
-];
+/** Clockwise from the bottom-right corner on an 11×11 pit. Column, row are 1-indexed. */
+export const COORDS: ReadonlyArray<readonly [number, number]> = buildCoords();
+
+function buildCoords(): ReadonlyArray<readonly [number, number]> {
+  const n = 11;
+  const cells: Array<readonly [number, number]> = [];
+  for (let col = n; col >= 1; col--) cells.push([col, n]);
+  for (let row = n - 1; row >= 1; row--) cells.push([1, row]);
+  for (let col = 2; col <= n; col++) cells.push([col, 1]);
+  for (let row = 2; row <= n - 1; row++) cells.push([n, row]);
+  return cells;
+}
 
 export type Candle = { t: number; c: number };
-export type Phase = "need-roll" | "moving" | "need-choice" | "card" | "over";
+export type Phase = "need-roll" | "moving" | "need-choice" | "card" | "steal-roll" | "over";
 export type Card = { title: string; body: string; mode: "info" | "pre-steal" };
 export type Opt = {
   id: string;
@@ -124,8 +134,8 @@ export type State = {
   round: number;
   phase: Phase;
   dice: number;
-  sixChain: number;
-  chainRoll: boolean;
+  faces: [number, number];
+  stealHits: number;
   stepsLeft: number;
   bases: Record<Coin, number>;
   deltas: Record<Coin, number>;
@@ -173,11 +183,11 @@ export function qty(n: number): string {
 }
 
 export function fearLabel(n: number): string {
-  if (n < 25) return "極貪";
-  if (n < 40) return "貪婪";
+  if (n < 25) return "極端恐懼";
+  if (n < 40) return "恐懼";
   if (n < 55) return "中性";
-  if (n < 75) return "恐懼";
-  return "極端恐懼";
+  if (n < 75) return "貪婪";
+  return "極端貪婪";
 }
 
 export function liqLabel(n: number): string {
@@ -317,8 +327,8 @@ export function createGame(): State {
     round: 1,
     phase: "need-roll",
     dice: 0,
-    sixChain: 0,
-    chainRoll: false,
+    faces: [0, 0],
+    stealHits: 0,
     stepsLeft: 0,
     bases,
     deltas,
@@ -327,15 +337,23 @@ export function createGame(): State {
     fear: 50,
     liquidity: 50,
     nfts: [
-      { key: "cold", name: "冷庫", cost: 48, upgrade: 150, level: 1, owner: null },
-      { key: "rig", name: "機房", cost: 72, upgrade: 150, level: 1, owner: null },
-      { key: "roof", name: "天台", cost: 96, upgrade: 150, level: 1, owner: null },
-      { key: "port", name: "港口", cost: 58, upgrade: 150, level: 1, owner: null },
+      { key: "cold", name: "冷庫", cost: 40, upgrade: 150, level: 1, owner: null },
+      { key: "rig", name: "機房", cost: 56, upgrade: 150, level: 1, owner: null },
+      { key: "roof", name: "天台", cost: 78, upgrade: 150, level: 1, owner: null },
+      { key: "port", name: "港口", cost: 48, upgrade: 150, level: 1, owner: null },
+      { key: "asic", name: "礦機", cost: 64, upgrade: 150, level: 1, owner: null },
+      { key: "node", name: "節點", cost: 88, upgrade: 150, level: 1, owner: null },
+      { key: "rack", name: "機櫃", cost: 52, upgrade: 150, level: 1, owner: null },
+      { key: "sat", name: "衛星", cost: 96, upgrade: 150, level: 1, owner: null },
+      { key: "audit", name: "驗證", cost: 70, upgrade: 150, level: 1, owner: null },
+      { key: "hash", name: "算力", cost: 110, upgrade: 150, level: 1, owner: null },
+      { key: "gate", name: "閘道", cost: 84, upgrade: 150, level: 1, owner: null },
+      { key: "spare", name: "備援", cost: 120, upgrade: 150, level: 1, owner: null },
     ],
     feePot: 0,
     log: [
-      "盤口開啟。四人各持 150 USDT。恐貪 50、流動性居中。淨值先到 100,000，或讓其餘三人破產。",
-      "順時針走。經過起點免費 20。冷庫、機房、天台、港口要等別人踩到才收租，一級擲一顆骰、1–6 USDT。",
+      "盤口開啟。四人各持 150 USDT。恐貪 50（越高越貪婪）、流動性居中。淨值先到 100,000，或讓其餘三人破產。",
+      "順時針，兩粒骰。房子要等別人踩到才收租。停在盜錢包後，單骰連續三個 6 才能盜。",
     ],
     card: null,
     choiceHint: "",
@@ -350,36 +368,45 @@ function actor(s: State): Player {
 }
 
 export function roll(state: State): State {
-  if (state.phase !== "need-roll") return state;
   if (state.players[state.turn].bankrupt) return state;
+  if (state.phase === "steal-roll") return rollStealDie(state);
+  if (state.phase !== "need-roll") return state;
   const s = structuredClone(state) as State;
-  const n = 1 + Math.floor(Math.random() * 6);
-  s.dice = n;
-  const me = actor(s);
-  pushLog(s, `${me.name} 擲出 ${n}`);
-  if (n === 6) {
-    s.sixChain += 1;
-    if (s.sixChain >= 3) {
-      s.sixChain = 0;
-      s.chainRoll = false;
-      s.fear = r2(clamp(s.fear + 10, 0, 100));
-      s.card = {
-        title: "三連六",
-        body: "連續三個 6。不走路，直接被丟到右上角「盜錢包」。恐貪指數上升。",
-        mode: "pre-steal",
-      };
-      s.phase = "card";
-      pushLog(s, `${me.name} 三連六，送往盜錢包`);
-      return s;
-    }
-    s.chainRoll = true;
-    pushLog(s, `${me.name} 擲出 6，這格結算後可以再擲`);
-  } else {
-    s.sixChain = 0;
-    s.chainRoll = false;
-  }
-  s.stepsLeft = n;
+  const a = 1 + Math.floor(Math.random() * 6);
+  const b = 1 + Math.floor(Math.random() * 6);
+  s.faces = [a, b];
+  s.dice = a + b;
+  s.stepsLeft = a + b;
   s.phase = "moving";
+  const me = actor(s);
+  pushLog(s, `${me.name} 擲出 ${a} 與 ${b}`);
+  return s;
+}
+
+function rollStealDie(state: State): State {
+  const s = structuredClone(state) as State;
+  const d = 1 + Math.floor(Math.random() * 6);
+  s.faces = [d, 0];
+  s.dice = d;
+  const me = actor(s);
+  if (d === 6) {
+    s.stealHits += 1;
+    pushLog(s, `${me.name} 在盜錢包擲出 6（第 ${s.stealHits} 粒）`);
+    if (s.stealHits >= 3) {
+      pushLog(s, `${me.name} 連續三個 6，可以盜錢包`);
+      return openSteal(s);
+    }
+    s.choiceHint = `已連續 ${s.stealHits} 個 6。還要再擲 ${3 - s.stealHits} 次，每次只擲一粒。`;
+    return s;
+  }
+  s.stealHits = 0;
+  s.card = {
+    title: "盜錢包 · 未連中",
+    body: `${me.name} 擲出 ${d}，不是 6。連續中斷，這次不能盜。下一回合從這裡繼續走。`,
+    mode: "info",
+  };
+  s.phase = "card";
+  pushLog(s, `${me.name} 擲出 ${d}，不是 6`);
   return s;
 }
 
@@ -444,8 +471,26 @@ function land(s: State): State {
     s.phase = "card";
     return s;
   }
+  if (tile.kind === "tax") {
+    const due = r2(me.cash * 0.1);
+    me.cash = r2(me.cash - due);
+    s.card = {
+      title: "交稅",
+      body: `抽走 ${me.name} 持有 USDT 的 10%，即 ${money(due)} USDT。幣和房子不課這筆。`,
+      mode: "info",
+    };
+    pushLog(s, `${me.name} 交稅 ${money(due)} USDT`);
+    s.phase = "card";
+    return s;
+  }
   if (tile.kind === "steal") {
-    return openSteal(s);
+    s.stealHits = 0;
+    s.faces = [0, 0];
+    s.dice = 0;
+    s.phase = "steal-roll";
+    s.choiceHint = "停在盜錢包。連續擲出三個 6（每次只擲一粒）才能拿走一名對手 50% 的 USDT。";
+    pushLog(s, `${me.name} 停在盜錢包，開始擲單骰`);
+    return s;
   }
   if (tile.kind === "mine") {
     if (me.miner) {
@@ -492,7 +537,7 @@ function land(s: State): State {
     return s;
   }
   if (tile.kind === "p2p") {
-    s.choiceHint = "玩家內部成交，價格用現價。發起人付 2.5%。也可以把 NFT 房賣給現金最多的對手。";
+    s.choiceHint = "玩家內部成交，價格用現價。發起人付 2.5%。也可以把 NFT 房賣給 USDT 最多的對手。";
     s.phase = "need-choice";
     return s;
   }
@@ -509,13 +554,13 @@ function openSteal(s: State): State {
   if (!any) {
     s.card = {
       title: "盜錢包",
-      body: `${me.name} 站上右上角，但其他人的現金都不足 1 USDT。`,
+      body: `${me.name} 連中三個 6，但其他人的 USDT 都不足 1。`,
       mode: "info",
     };
     s.phase = "card";
     return s;
   }
-  s.choiceHint = "右上角盜錢包：指定一名對手，拿走其現金的 50%。幣與 NFT 不動。";
+  s.choiceHint = "三個 6 已連中。指定一名對手，拿走其 USDT 的 50%。幣與 NFT 不動。";
   s.phase = "need-choice";
   return s;
 }
@@ -568,10 +613,10 @@ function applyFund(s: State) {
     };
   } else if (rolln === 6) {
     s.liquidity = r2(clamp(s.liquidity + 12, 0, 100));
-    s.fear = r2(clamp(s.fear - 8, 0, 100));
+    s.fear = r2(clamp(s.fear + 8, 0, 100));
     s.card = {
       title: "基本面 · 穩定幣鑄造",
-      body: "流動性 +12，恐貪下降。幣價基本面這張不動。",
+      body: "流動性 +12，恐貪上升（更貪婪）。幣價基本面這張不動。",
       mode: "info",
     };
   } else {
@@ -592,11 +637,11 @@ function applyMarketCard(s: State) {
   const me = actor(s);
   const coin = COINS[Math.floor(Math.random() * 3)];
   if (rolln === 0) {
-    s.fear = r2(clamp(s.fear + 16, 0, 100));
+    s.fear = r2(clamp(s.fear - 16, 0, 100));
     for (const c of COINS) bumpDelta(s, c, -0.05);
     s.card = {
       title: "市場 · 恐懼蔓延",
-      body: "恐貪 +16。三種市場價 PΔ 各 −5% 基本面。",
+      body: "恐貪 −16，轉向恐懼。三種市場價 PΔ 各 −5% 基本面。",
       mode: "info",
     };
   } else if (rolln === 1) {
@@ -614,11 +659,11 @@ function applyMarketCard(s: State) {
       mode: "info",
     };
   } else if (rolln === 3) {
-    s.fear = r2(clamp(s.fear - 14, 0, 100));
+    s.fear = r2(clamp(s.fear + 14, 0, 100));
     for (const c of COINS) bumpDelta(s, c, 0.04);
     s.card = {
       title: "市場 · 貪婪回歸",
-      body: "恐貪下降。三種市場價各 +4% 基本面。",
+      body: "恐貪 +14，轉向貪婪。三種市場價各 +4% 基本面。",
       mode: "info",
     };
   } else if (rolln === 4) {
@@ -638,10 +683,10 @@ function applyMarketCard(s: State) {
     };
   } else if (rolln === 6) {
     bumpDelta(s, coin, -0.08);
-    s.fear = r2(clamp(s.fear + 6, 0, 100));
+    s.fear = r2(clamp(s.fear - 6, 0, 100));
     s.card = {
       title: "市場 · 假突破",
-      body: `${coin} 市場價 −8% 基本面，恐貪微升。`,
+      body: `${coin} 市場價 −8% 基本面，恐貪微降。`,
       mode: "info",
     };
   } else {
@@ -672,7 +717,7 @@ function applyAirdrop(s: State) {
   me.bags[c] = r4(me.bags[c] + q);
   s.card = {
     title: "空投",
-    body: `${me.name} 收到 ${qty(q)} ${c}，約值 ${money(value)} USDT。直接進持倉，不經錢包現金。`,
+    body: `${me.name} 收到 ${qty(q)} ${c}，約值 ${money(value)} USDT。直接進持倉，不經 USDT。`,
     mode: "info",
   };
   pushLog(s, `${me.name} 空投 ${qty(q)} ${c}`);
@@ -707,7 +752,7 @@ function stealOptions(s: State): Opt[] {
       return {
         id: `steal:${i}`,
         label: `盜 ${p.name}`,
-        detail: disabled ? "現金不足" : `拿走 ${money(take)} USDT`,
+        detail: disabled ? "USDT 不足" : `拿走 ${money(take)} USDT`,
         tone: "danger" as const,
         disabled,
       };
@@ -740,7 +785,7 @@ function nftOptions(s: State, index: number): Opt[] {
       {
         id: "nft-buy",
         label: `買下${nft.name}`,
-        detail: afford ? `${money(nft.cost)} USDT` : "現金不夠",
+        detail: afford ? `${money(nft.cost)} USDT` : "USDT 不夠",
         tone: "primary",
         disabled: !afford,
       },
@@ -753,7 +798,7 @@ function nftOptions(s: State, index: number): Opt[] {
     {
       id: "nft-up",
       label: `升到 ${nft.level + 1} 級`,
-      detail: nft.level >= MAX_NFT_LEVEL ? "已滿級" : afford ? `${money(cost)} USDT` : "現金不夠",
+      detail: nft.level >= MAX_NFT_LEVEL ? "已滿級" : afford ? `${money(cost)} USDT` : "USDT 不夠",
       tone: "primary",
       disabled: !afford,
     },
@@ -774,7 +819,7 @@ function spotOptions(s: State, c: Coin): Opt[] {
       detail:
         me.cash >= cost
           ? `${money(cost)} 含費`
-          : "現金不夠",
+          : "USDT 不夠",
       tone: "primary",
       disabled: me.cash < cost,
     });
@@ -808,7 +853,7 @@ function p2pOptions(s: State): Opt[] {
       label: `賣出 ${c}`,
       detail: ok
         ? `25% 給 ${buyer!.name}`
-        : "對手現金或持倉不夠",
+        : "對手 USDT 或持倉不夠",
       tone: "ghost",
       disabled: !ok,
     });
@@ -824,7 +869,7 @@ function p2pOptions(s: State): Opt[] {
       opts.push({
         id: `p2p-buy:${i}:${c}`,
         label: `向${s.players[i].name}買 ${c}`,
-        detail: ok ? `${qty(q)} · ${money(notional + fee)}` : "現金不夠",
+        detail: ok ? `${qty(q)} · ${money(notional + fee)}` : "USDT 不夠",
         tone: "primary",
         disabled: !ok,
       });
@@ -904,7 +949,7 @@ export function applyOption(state: State, id: string): State {
     if (take < 0.5) return state;
     victim.cash = r2(victim.cash - take);
     me.cash = r2(me.cash + take);
-    pushLog(s, `${me.name} 盜走 ${victim.name} 現金 ${money(take)}（50%）`);
+    pushLog(s, `${me.name} 盜走 ${victim.name} ${money(take)} USDT（50%）`);
     return settle(s);
   }
   if (op === "mine") {
@@ -1044,12 +1089,12 @@ export function aiPick(s: State, opts: Opt[]): string {
     const up = live.find((o) => o.id === "nft-up");
     const nft = s.nfts[tile.nft!];
     const mult = me.style === "whale" ? 1.45 : me.style === "mm" ? 1.85 : 2.35;
-    if (buy && me.cash >= nft.cost * mult && s.fear < (me.style === "whale" ? 82 : 68)) {
+    if (buy && me.cash >= nft.cost * mult && s.fear > (me.style === "whale" ? 18 : 32)) {
       return buy.id;
     }
     const cost = upgradeCost(nft.level);
     const cushion = me.style === "whale" ? 30 : me.style === "mm" ? 70 : 110;
-    if (up && nft.level < MAX_NFT_LEVEL && me.cash >= cost + cushion && s.fear < 74) {
+    if (up && nft.level < MAX_NFT_LEVEL && me.cash >= cost + cushion && s.fear > 26) {
       return up.id;
     }
     return skip?.id ?? live[0].id;
@@ -1058,7 +1103,7 @@ export function aiPick(s: State, opts: Opt[]): string {
   if (tile.kind === "mine") {
     const buy = live.find((o) => o.id === "mine");
     const floor = me.style === "whale" ? 70 : me.style === "mm" ? 95 : 120;
-    if (buy && me.cash >= floor && s.fear < 70) return buy.id;
+    if (buy && me.cash >= floor && s.fear > 30) return buy.id;
     return skip?.id ?? live[0].id;
   }
 
@@ -1079,21 +1124,21 @@ export function aiPick(s: State, opts: Opt[]): string {
       return skip?.id ?? live[0].id;
     }
     if (me.style === "whale") {
-      if (price < avg * 1.03 && s.fear < 78) {
+      if (price < avg * 1.03 && s.fear > 22) {
         const buy = [...live].reverse().find((o) => o.id.startsWith(`buy:${c}:`));
         if (buy) return buy.id;
       }
-      if ((price > avg * 1.18 || s.fear > 72) && me.bags[c] > 0) {
+      if ((price > avg * 1.18 || s.fear < 28) && me.bags[c] > 0) {
         const sell = live.find((o) => o.id === `sell:${c}:0.25` || o.id === `sell:${c}:0.5`);
         if (sell) return sell.id;
       }
       return skip?.id ?? live[0].id;
     }
-    if (s.fear > 68 && me.bags[c] > 0) {
+    if (s.fear < 32 && me.bags[c] > 0) {
       const sell = live.find((o) => o.id === `sell:${c}:0.5`) ?? live.find((o) => o.id.startsWith("sell:"));
       if (sell) return sell.id;
     }
-    if (price < avg * 0.97 && s.fear < 58) {
+    if (price < avg * 0.97 && s.fear > 42) {
       const buy = live.find((o) => o.id.startsWith(`buy:${c}:`));
       if (buy) return buy.id;
     }
@@ -1101,15 +1146,15 @@ export function aiPick(s: State, opts: Opt[]): string {
   }
 
   if (tile.kind === "p2p") {
-    if (s.fear > 64) {
+    if (s.fear < 36) {
       const sell = live.find((o) => o.id.startsWith("p2p-sell") && !o.disabled);
       if (sell && me.style !== "whale") return sell.id;
     }
-    if (me.style === "whale" && s.fear < 60) {
+    if (me.style === "whale" && s.fear > 40) {
       const buy = live.find((o) => o.id.startsWith("p2p-buy"));
       if (buy) return buy.id;
     }
-    if (me.cash < 40 && s.fear > 70) {
+    if (me.cash < 40 && s.fear < 30) {
       const house = live.find((o) => o.id.startsWith("p2p-nft"));
       if (house) return house.id;
     }
@@ -1123,19 +1168,10 @@ function settle(s: State): State {
   if (s.phase === "over") return s;
   markBankrupt(s);
   if (detectWin(s)) return s;
-  const me = actor(s);
-  if (s.chainRoll && !me.bankrupt) {
-    s.phase = "need-roll";
-    s.choiceHint = "";
-    pushLog(s, `${me.name} 再擲一次（K 線仍未收）`);
-    return s;
-  }
   shock(s);
   payYields(s);
   markBankrupt(s);
   if (detectWin(s)) return s;
-  s.chainRoll = false;
-  s.sixChain = 0;
   advance(s);
   return s;
 }
@@ -1143,7 +1179,8 @@ function settle(s: State): State {
 function shock(s: State) {
   const prev: Record<Coin, number> = { ...s.prices };
   for (const c of COINS) {
-    const vol = s.bases[c] * (0.02 + (s.fear / 100) * 0.055);
+    const panic = (100 - s.fear) / 100;
+    const vol = s.bases[c] * (0.02 + panic * 0.055);
     const noise = clamp(gauss() * vol, -2.6 * vol, 2.6 * vol);
     s.deltas[c] = r2(s.deltas[c] * 0.9 + noise);
   }
@@ -1151,7 +1188,7 @@ function shock(s: State) {
   let ret = 0;
   for (const c of COINS) ret += (s.prices[c] - prev[c]) / prev[c];
   const avg = ret / 3;
-  s.fear = r2(clamp(s.fear * 0.9 + 42 * 0.1 - avg * 160, 2, 98));
+  s.fear = r2(clamp(s.fear * 0.9 + 50 * 0.1 + avg * 160, 2, 98));
   s.liquidity = r2(clamp(s.liquidity * 0.92 + 58 * 0.08 + avg * 36, 8, 98));
   s.tick += 1;
   for (const c of COINS) {
@@ -1171,7 +1208,7 @@ function payYields(s: State) {
     s.feePot = 0;
   }
   if (me.miner && !me.bankrupt) {
-    const pay = r2(4 * (0.55 + s.liquidity / 200) * (1 - s.fear / 280));
+    const pay = r2(4 * (0.55 + s.liquidity / 200) * (0.65 + s.fear / 280));
     me.cash = r2(me.cash + pay);
     pushLog(s, `${me.name} 挖礦產出 ${money(pay)}`);
   }
@@ -1227,6 +1264,8 @@ function advance(s: State) {
       s.phase = "need-roll";
       s.choiceHint = "";
       s.dice = 0;
+      s.faces = [0, 0];
+      s.stealHits = 0;
       return;
     }
   }
