@@ -115,7 +115,9 @@ export function sfxBust() {
 }
 
 export function playLog(line: string) {
-  if (line.includes("擲出")) sfxDice();
+  if (line.includes("擲出 Free")) sfxAir();
+  else if (line.includes("擲出 X")) sfxFail();
+  else if (line.includes("擲出")) sfxDice();
   else if (line.includes("經過起點")) sfxPass();
   else if (line.includes("升到")) sfxUpgrade();
   else if (line.includes("買下")) sfxBuy();
@@ -123,7 +125,6 @@ export function playLog(line: string) {
   else if (line.includes("盜走")) sfxSteal();
   else if (line.includes("不是 6") || line.includes("未連中")) sfxFail();
   else if (line.includes("踩中")) sfxRent();
-  else if (line.includes("空投")) sfxAir();
   else if (line.includes("破產")) sfxBust();
   else if (line.includes("抽到")) sfxCard();
 }

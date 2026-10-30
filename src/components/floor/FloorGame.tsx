@@ -117,7 +117,7 @@ export function FloorGame() {
     }
     const p = game.players[game.turn];
     if (p.human) return;
-    const wait = game.phase === "need-roll" || game.phase === "steal-roll" ? 420 : game.phase === "card" ? 1100 : 760;
+    const wait = game.phase === "need-roll" || game.phase === "steal-roll" || game.phase === "air-roll" ? 420 : game.phase === "card" ? 1100 : 760;
     const t = setTimeout(() => useFloor.getState().ai(), wait);
     return () => clearTimeout(t);
   }, [game, authority]);
@@ -167,7 +167,7 @@ export function FloorGame() {
       if (!g) return;
       const mine = net ? (net.host ? 0 : online.mySeat) : 0;
       if (g.turn !== mine || !g.players[g.turn].human) return;
-      if (g.phase === "need-roll" || g.phase === "steal-roll") {
+      if (g.phase === "need-roll" || g.phase === "steal-roll" || g.phase === "air-roll") {
         e.preventDefault();
         actRoll();
       } else if (g.phase === "card") {
@@ -235,7 +235,7 @@ export function FloorGame() {
               開局 150 USDT。恐貪 50（中性），流動性在正中。順時針走。
             </li>
             <li className="rounded-xl border border-line bg-surface px-3 py-3">
-              起點在右下，空投在左下。每經過起點免費 20 USDT。
+              起點在右下，空投在左下。空投骰只有一面 Free，其餘是 X。每經過起點免費 20 USDT。
             </li>
             <li className="rounded-xl border border-line bg-surface px-3 py-3">
               右上角是盜錢包：停在那裡後，用一粒骰連續擲出三個 6 才能盜走 50% USDT。平時走棋擲兩粒。
@@ -244,7 +244,7 @@ export function FloorGame() {
               房子一級過路費擲一顆骰，1–6 USDT。每升一級多一顆骰。升到二級要 150 USDT，之後每級再加 150。
             </li>
             <li className="rounded-xl border border-line bg-surface px-3 py-3">
-              可跟朋友開房，空位由 AI 替補。淨值先到 100,000 USDT 即勝。
+              可跟朋友開房，空位由 AI 替補。淨值先到 10,000 USDT 即勝。
             </li>
           </ul>
           <button
@@ -366,7 +366,8 @@ export function FloorGame() {
           <section className="rounded-xl border border-line bg-surface p-4 text-sm leading-relaxed text-muted">
             棋盤 40 格，順時針。起點在右下角。經過起點免費 20 USDT。
             房子只有別人踩到才收租，一級 1–6，每級多一顆骰。升級 150 USDT 起。
-            交稅抽走 10% USDT。盜錢包要停在該格，單骰連續三個 6 才可盜 50%。
+            交稅抽走 10% USDT。空投要擲一顆字骰，只有 Free 才領到，X 就沒有。
+            盜錢包要停在該格，單骰連續三個 6 才可盜 50%。淨值 10,000 USDT 即勝。
             恐貪越高越貪婪，開局 50。淨值跌破 15 會被平倉。配樂與音效可並存。
           </section>
         )}
@@ -466,7 +467,7 @@ export function FloorGame() {
             <p className="mt-2 text-sm text-muted">
               {game.winReason === "wipe"
                 ? "其餘玩家都已破產。"
-                : `淨值 ${money(netWorth(game, game.winner))} USDT，越過 100,000。`}
+                : `淨值 ${money(netWorth(game, game.winner))} USDT，越過 10,000。`}
             </p>
             <p className="mt-2 font-mono text-sm">
               你的淨值 {money(netWorth(game, localSeat < 0 ? 0 : localSeat))}
@@ -551,11 +552,17 @@ function Board({ game }: { game: State }) {
         </div>
         <div className="flex flex-1 flex-col items-center justify-center gap-2">
           <div className="flex items-center gap-3">
-            <Die value={game.faces?.[0] ?? 0} />
-            {game.phase === "steal-roll" ? (
-              <p className="max-w-24 text-center text-xs text-muted">單骰 · 已連中 {game.stealHits ?? 0}/3</p>
+            {game.phase === "air-roll" || (game.airFace > 0 && game.card?.title.startsWith("空投")) ? (
+              <WordDie face={game.airFace} />
             ) : (
-              <Die value={game.faces?.[1] ?? 0} />
+              <>
+                <Die value={game.faces?.[0] ?? 0} />
+                {game.phase === "steal-roll" ? (
+                  <p className="max-w-24 text-center text-xs text-muted">單骰 · 已連中 {game.stealHits ?? 0}/3</p>
+                ) : (
+                  <Die value={game.faces?.[1] ?? 0} />
+                )}
+              </>
             )}
           </div>
           <p className="text-center text-sm font-medium">
@@ -563,6 +570,8 @@ function Board({ game }: { game: State }) {
               ? "收盤"
               : game.phase === "moving"
                 ? `${meName(game)} 移動中`
+                : game.phase === "air-roll"
+                  ? `${meName(game)} 擲空投骰`
                 : game.phase === "steal-roll"
                   ? `${meName(game)} 停在盜錢包`
                   : `${meName(game)} 的回合`}
@@ -599,6 +608,25 @@ function Meter({
           style={{ width: `${Math.max(4, Math.min(100, pct))}%` }}
         />
       </div>
+    </div>
+  );
+}
+
+function WordDie({ face }: { face: number }) {
+  const label = face === 1 ? "Free" : face > 1 ? "X" : "";
+  const [spin, setSpin] = useState(false);
+  useEffect(() => {
+    if (!face) return;
+    setSpin(true);
+    const t = setTimeout(() => setSpin(false), 480);
+    return () => clearTimeout(t);
+  }, [face]);
+  return (
+    <div
+      className={cx("die flex h-16 w-16 items-center justify-center", spin && "die-spin", face === 0 && "opacity-35")}
+      aria-label={label ? `空投骰 ${label}` : "空投骰尚未擲"}
+    >
+      <span className={cx("font-mono text-sm font-medium text-[#1c140c]", label === "X" && "text-lg")}>{label}</span>
     </div>
   );
 }
@@ -723,7 +751,7 @@ function Dock({
         </div>
       )}
 
-      {(game.phase === "need-roll" || game.phase === "moving" || game.phase === "steal-roll") && (
+      {(game.phase === "need-roll" || game.phase === "moving" || game.phase === "steal-roll" || game.phase === "air-roll") && (
         <div>
           <p className="text-sm text-muted">
             {game.phase === "moving"
@@ -732,17 +760,21 @@ function Dock({
                 ? human
                   ? `停在盜錢包。擲一粒，已連續 ${game.stealHits ?? 0} 個 6。`
                   : `${me.name} 在盜錢包擲單骰。`
+                : game.phase === "air-roll"
+                  ? human
+                    ? "空投骰：一面 Free，五面 X。"
+                    : `${me.name} 在擲空投骰。`
                 : human
                   ? "擲兩粒骰子，點數相加後順時針走。"
                   : `${me.name} 準備擲骰。`}
           </p>
-          {human && (game.phase === "need-roll" || game.phase === "steal-roll") ? (
+          {human && (game.phase === "need-roll" || game.phase === "steal-roll" || game.phase === "air-roll") ? (
             <button
               type="button"
               onClick={onRoll}
               className="mt-3 h-12 w-full rounded-xl bg-primary font-medium text-bg"
             >
-              {game.phase === "steal-roll" ? "擲一粒" : "擲兩粒"}
+              {game.phase === "air-roll" ? "擲空投骰" : game.phase === "steal-roll" ? "擲一粒" : "擲兩粒"}
             </button>
           ) : (
             <p className="mt-3 font-mono text-xs text-primary">

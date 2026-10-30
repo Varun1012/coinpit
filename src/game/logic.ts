@@ -1,7 +1,7 @@
 export const COINS = ["BTC", "ETH", "XRP"] as const;
 export type Coin = (typeof COINS)[number];
 
-export const WIN = 100_000;
+export const WIN = 10_000;
 export const START_CASH = 150;
 export const STIPEND = 20;
 export const MINE_COST = 36;
@@ -116,7 +116,7 @@ function buildCoords(): ReadonlyArray<readonly [number, number]> {
 }
 
 export type Candle = { t: number; c: number };
-export type Phase = "need-roll" | "moving" | "need-choice" | "card" | "steal-roll" | "over";
+export type Phase = "need-roll" | "moving" | "need-choice" | "card" | "steal-roll" | "air-roll" | "over";
 export type Card = { title: string; body: string; mode: "info" | "pre-steal" };
 export type Opt = {
   id: string;
@@ -135,6 +135,8 @@ export type State = {
   phase: Phase;
   dice: number;
   faces: [number, number];
+  /** 1 = Free，2–6 = X，0 = 還沒擲。 */
+  airFace: number;
   stealHits: number;
   stepsLeft: number;
   bases: Record<Coin, number>;
@@ -328,6 +330,7 @@ export function createGame(): State {
     phase: "need-roll",
     dice: 0,
     faces: [0, 0],
+    airFace: 0,
     stealHits: 0,
     stepsLeft: 0,
     bases,
@@ -352,8 +355,8 @@ export function createGame(): State {
     ],
     feePot: 0,
     log: [
-      "盤口開啟。四人各持 150 USDT。恐貪 50（越高越貪婪）、流動性居中。淨值先到 100,000，或讓其餘三人破產。",
-      "順時針，兩粒骰。房子要等別人踩到才收租。停在盜錢包後，單骰連續三個 6 才能盜。",
+      "盤口開啟。四人各持 150 USDT。恐貪 50（越高越貪婪）、流動性居中。淨值先到 10,000，或讓其餘三人破產。",
+      "順時針，兩粒骰。空投骰只有一面 Free。停在盜錢包後，單骰連續三個 6 才能盜。",
     ],
     card: null,
     choiceHint: "",
@@ -370,6 +373,7 @@ function actor(s: State): Player {
 export function roll(state: State): State {
   if (state.players[state.turn].bankrupt) return state;
   if (state.phase === "steal-roll") return rollStealDie(state);
+  if (state.phase === "air-roll") return rollAirDie(state);
   if (state.phase !== "need-roll") return state;
   const s = structuredClone(state) as State;
   const a = 1 + Math.floor(Math.random() * 6);
@@ -380,6 +384,34 @@ export function roll(state: State): State {
   s.phase = "moving";
   const me = actor(s);
   pushLog(s, `${me.name} 擲出 ${a} 與 ${b}`);
+  return s;
+}
+
+function rollAirDie(state: State): State {
+  const s = structuredClone(state) as State;
+  const d = 1 + Math.floor(Math.random() * 6);
+  s.airFace = d;
+  const me = actor(s);
+  if (d === 1) {
+    const c = COINS[Math.floor(Math.random() * 3)];
+    const value = r2(6 + Math.random() * 16);
+    const q = r4(value / s.prices[c]);
+    me.bags[c] = r4(me.bags[c] + q);
+    s.card = {
+      title: "空投 · Free",
+      body: `空投骰擲出 Free。${me.name} 收到 ${qty(q)} ${c}，約值 ${money(value)} USDT，直接進持倉。`,
+      mode: "info",
+    };
+    pushLog(s, `${me.name} 擲出 Free，空投 ${qty(q)} ${c}`);
+  } else {
+    s.card = {
+      title: "空投 · X",
+      body: "這面是 X。六面裡只有一面寫 Free，其餘都不能領。",
+      mode: "info",
+    };
+    pushLog(s, `${me.name} 擲出 X，沒有空投`);
+  }
+  s.phase = "card";
   return s;
 }
 
@@ -467,8 +499,10 @@ function land(s: State): State {
     return s;
   }
   if (tile.kind === "air") {
-    applyAirdrop(s);
-    s.phase = "card";
+    s.airFace = 0;
+    s.phase = "air-roll";
+    s.choiceHint = "空投骰六面只有一面是 Free，其餘是 X。擲中 Free 才收到幣。";
+    pushLog(s, `${me.name} 停在空投，準備擲空投骰`);
     return s;
   }
   if (tile.kind === "tax") {
@@ -707,20 +741,6 @@ function bumpBase(s: State, c: Coin, pct: number) {
 
 function bumpDelta(s: State, c: Coin, pctOfBase: number) {
   s.deltas[c] = r2(s.deltas[c] + s.bases[c] * pctOfBase);
-}
-
-function applyAirdrop(s: State) {
-  const me = actor(s);
-  const c = COINS[Math.floor(Math.random() * 3)];
-  const value = r2(6 + Math.random() * 16);
-  const q = r4(value / s.prices[c]);
-  me.bags[c] = r4(me.bags[c] + q);
-  s.card = {
-    title: "空投",
-    body: `${me.name} 收到 ${qty(q)} ${c}，約值 ${money(value)} USDT。直接進持倉，不經 USDT。`,
-    mode: "info",
-  };
-  pushLog(s, `${me.name} 空投 ${qty(q)} ${c}`);
 }
 
 function nudge(s: State, c: Coin, notional: number, sign: number) {
@@ -1248,7 +1268,7 @@ function detectWin(s: State): boolean {
     s.winner = rich[0].i;
     s.winReason = "net";
     s.phase = "over";
-    pushLog(s, `${rich[0].p.name} 淨值到 ${money(rich[0].net)}，破 100,000`);
+    pushLog(s, `${rich[0].p.name} 淨值到 ${money(rich[0].net)}，破 10,000`);
     return true;
   }
   return false;
@@ -1265,6 +1285,7 @@ function advance(s: State) {
       s.choiceHint = "";
       s.dice = 0;
       s.faces = [0, 0];
+      s.airFace = 0;
       s.stealHits = 0;
       return;
     }

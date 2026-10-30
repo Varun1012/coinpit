@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import * as L from "./logic";
 
-const KEY = "coinpit-v3";
+const KEY = "coinpit-v4";
 
 type Store = {
   game: L.State | null;
@@ -99,7 +99,7 @@ export const useFloor = create<Store>((set, get) => ({
     const p = g.players[g.turn];
     if (p.human || p.bankrupt) return;
     let next = g;
-    if (g.phase === "need-roll" || g.phase === "steal-roll") next = L.roll(g);
+    if (g.phase === "need-roll" || g.phase === "steal-roll" || g.phase === "air-roll") next = L.roll(g);
     else if (g.phase === "card") next = L.dismissCard(g);
     else if (g.phase === "need-choice") {
       const opts = L.currentOptions(g);
