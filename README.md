@@ -1,6 +1,6 @@
 # 幣盤
 
-直接玩：<https://cdn.jsdelivr.net/gh/Varun1012/coinpit@gh-pages/index.html>
+直接玩：<https://varun1012.github.io/coinpit/>
 
 四人加密棋盤。價格 = 基本面 P* + 市場 PΔ，每名玩家結束回合收一根線。
 
