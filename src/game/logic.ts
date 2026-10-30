@@ -8,6 +8,12 @@ export const MINE_COST = 36;
 export const FEE = 0.025;
 export const BOARD = 20;
 export const STEAL_AT = 15;
+export const MAX_NFT_LEVEL = 6;
+
+/** 升到下一級的價錢。一級升二級 150，之後每級再加 150。 */
+export function upgradeCost(level: number): number {
+  return 150 * level;
+}
 
 const INITIAL: Record<Coin, number> = { BTC: 28, ETH: 4.6, XRP: 0.28 };
 
@@ -221,9 +227,9 @@ function sync(s: State) {
 }
 
 export function nftBook(n: Nft): number {
-  if (n.level <= 1) return n.cost;
-  if (n.level === 2) return n.cost + n.upgrade;
-  return n.cost + n.upgrade * 2;
+  let v = n.cost;
+  for (let level = 1; level < n.level; level++) v += upgradeCost(level);
+  return v;
 }
 
 export function netWorth(s: State, i: number): number {
@@ -321,15 +327,15 @@ export function createGame(): State {
     fear: 50,
     liquidity: 50,
     nfts: [
-      { key: "cold", name: "冷庫", cost: 48, upgrade: 30, level: 1, owner: null },
-      { key: "rig", name: "機房", cost: 72, upgrade: 42, level: 1, owner: null },
-      { key: "roof", name: "天台", cost: 96, upgrade: 55, level: 1, owner: null },
-      { key: "port", name: "港口", cost: 58, upgrade: 34, level: 1, owner: null },
+      { key: "cold", name: "冷庫", cost: 48, upgrade: 150, level: 1, owner: null },
+      { key: "rig", name: "機房", cost: 72, upgrade: 150, level: 1, owner: null },
+      { key: "roof", name: "天台", cost: 96, upgrade: 150, level: 1, owner: null },
+      { key: "port", name: "港口", cost: 58, upgrade: 150, level: 1, owner: null },
     ],
     feePot: 0,
     log: [
       "盤口開啟。四人各持 150 USDT。恐貪 50、流動性居中。淨值先到 100,000，或讓其餘三人破產。",
-      "順時針走。經過起點免費 20 USDT。價格 = 基本面 P* + 市場 PΔ，每回合收一根線。",
+      "順時針走。經過起點免費 20。冷庫、機房、天台、港口要等別人踩到才收租，一級擲一顆骰、1–6 USDT。",
     ],
     card: null,
     choiceHint: "",
@@ -391,6 +397,26 @@ export function step(state: State): State {
   return s;
 }
 
+function chargeRent(s: State, nft: Nft): State {
+  const me = actor(s);
+  const owner = s.players[nft.owner!];
+  const faces: number[] = [];
+  for (let i = 0; i < nft.level; i++) faces.push(1 + Math.floor(Math.random() * 6));
+  const sum = faces.reduce((a, b) => a + b, 0);
+  const pay = r2(Math.min(me.cash, sum));
+  me.cash = r2(me.cash - pay);
+  if (!owner.bankrupt) owner.cash = r2(owner.cash + pay);
+  const shown = faces.join(" + ");
+  s.card = {
+    title: `${nft.name} · 骰 ${shown}`,
+    body: `${nft.level} 級過路費。${me.name} 踩到 ${owner.name} 的房子，擲出 ${shown} = ${sum} USDT，實付 ${money(pay)}。自己踩到不收租。`,
+    mode: "info",
+  };
+  pushLog(s, `${me.name} 踩中 ${owner.name} 的${nft.name}，骰 ${shown}，付 ${money(pay)}`);
+  s.phase = "card";
+  return s;
+}
+
 function land(s: State): State {
   const me = actor(s);
   const tile = TILES[me.pos];
@@ -438,41 +464,35 @@ function land(s: State): State {
   if (tile.kind === "nft" && tile.nft !== undefined) {
     const nft = s.nfts[tile.nft];
     if (nft.owner === null) {
-      s.choiceHint = `${nft.name} 無人持有。買下後，玩家交易費與每根 K 線的外部流動會按等級分成給你。踩到這格本身不收租。`;
+      s.choiceHint = `${nft.name} 沒人持有。買下之後，其他玩家踩到才收租：一級擲一顆骰，1–6 USDT，每升一級多一顆。`;
       s.phase = "need-choice";
       return s;
     }
     if (nft.owner === s.turn) {
-      if (nft.level >= 3) {
+      if (nft.level >= MAX_NFT_LEVEL) {
         s.card = {
           title: nft.name,
-          body: "已是 3 級。分成權重已滿，這格沒有別的動作。",
+          body: `已是 ${MAX_NFT_LEVEL} 級。別人踩到會擲 ${MAX_NFT_LEVEL} 顆骰。自己踩到不收租。`,
           mode: "info",
         };
         s.phase = "card";
         return s;
       }
-      s.choiceHint = `這是你的${nft.name}，現時 ${nft.level} 級。升級會提高每根 K 線與交易費的分成。`;
+      const cost = upgradeCost(nft.level);
+      s.choiceHint = `這是你的${nft.name}，${nft.level} 級。升到 ${nft.level + 1} 級要 ${money(cost)} USDT，過路費改為擲 ${nft.level + 1} 顆骰。`;
       s.phase = "need-choice";
       return s;
     }
-    const owner = s.players[nft.owner];
-    s.card = {
-      title: nft.name,
-      body: `${owner.name} 持有，${nft.level} 級。你不用付過路費。分成只在有人交易、以及每回合收線的外部流動時進對方口袋。`,
-      mode: "info",
-    };
-    s.phase = "card";
-    return s;
+    return chargeRent(s, nft);
   }
   if (tile.kind === "spot" && tile.coin) {
     const c = tile.coin;
-    s.choiceHint = `${c} 現貨 ${px(s.prices[c])}。買賣抽 ${FEE * 100}% ，進 NFT 分成池，並會推進下一根 K 線。可以略過。`;
+    s.choiceHint = `${c} 現貨 ${px(s.prices[c])}。買賣抽 ${FEE * 100}%，會推進下一根 K 線。可以略過。`;
     s.phase = "need-choice";
     return s;
   }
   if (tile.kind === "p2p") {
-    s.choiceHint = "玩家內部成交，價格用現價。發起人付 2.5% 進分成池。也可以把 NFT 房賣給現金最多的對手。";
+    s.choiceHint = "玩家內部成交，價格用現價。發起人付 2.5%。也可以把 NFT 房賣給現金最多的對手。";
     s.phase = "need-choice";
     return s;
   }
@@ -605,7 +625,7 @@ function applyMarketCard(s: State) {
     s.liquidity = r2(clamp(s.liquidity - 16, 0, 100));
     s.card = {
       title: "市場 · 流動性枯竭",
-      body: "成交量掉一檔。下一根線的外部流動會變薄，NFT 分成跟著縮。",
+      body: "成交量掉一檔。流動性下降，下一根線會比較薄。",
       mode: "info",
     };
   } else if (rolln === 5) {
@@ -727,16 +747,17 @@ function nftOptions(s: State, index: number): Opt[] {
       { id: "skip", label: "不買", detail: "讓它空著", tone: "ghost" },
     ];
   }
-  const afford = me.cash >= nft.upgrade;
+  const cost = upgradeCost(nft.level);
+  const afford = me.cash >= cost && nft.level < MAX_NFT_LEVEL;
   return [
     {
       id: "nft-up",
       label: `升到 ${nft.level + 1} 級`,
-      detail: afford ? `${money(nft.upgrade)} USDT` : "現金不夠",
+      detail: nft.level >= MAX_NFT_LEVEL ? "已滿級" : afford ? `${money(cost)} USDT` : "現金不夠",
       tone: "primary",
-      disabled: !afford || nft.level >= 3,
+      disabled: !afford,
     },
-    { id: "skip", label: "不升級", detail: "維持分成", tone: "ghost" },
+    { id: "skip", label: "不升級", detail: "維持現有骰數", tone: "ghost" },
   ];
 }
 
@@ -868,10 +889,11 @@ export function applyOption(state: State, id: string): State {
   if (op === "nft-up") {
     const tile = TILES[me.pos];
     const nft = s.nfts[tile.nft!];
-    if (nft.owner !== s.turn || nft.level >= 3 || me.cash < nft.upgrade) return state;
-    me.cash = r2(me.cash - nft.upgrade);
+    const cost = upgradeCost(nft.level);
+    if (nft.owner !== s.turn || nft.level >= MAX_NFT_LEVEL || me.cash < cost) return state;
+    me.cash = r2(me.cash - cost);
     nft.level += 1;
-    pushLog(s, `${me.name} 把${nft.name}升到 ${nft.level} 級`);
+    pushLog(s, `${me.name} 花 ${money(cost)} 把${nft.name}升到 ${nft.level} 級`);
     return settle(s);
   }
   if (op === "steal") {
@@ -1025,7 +1047,9 @@ export function aiPick(s: State, opts: Opt[]): string {
     if (buy && me.cash >= nft.cost * mult && s.fear < (me.style === "whale" ? 82 : 68)) {
       return buy.id;
     }
-    if (up && me.cash >= nft.upgrade * (me.style === "whale" ? 1.5 : 2.1) && s.fear < 74) {
+    const cost = upgradeCost(nft.level);
+    const cushion = me.style === "whale" ? 30 : me.style === "mm" ? 70 : 110;
+    if (up && nft.level < MAX_NFT_LEVEL && me.cash >= cost + cushion && s.fear < 74) {
       return up.id;
     }
     return skip?.id ?? live[0].id;
@@ -1139,44 +1163,13 @@ function shock(s: State) {
   );
 }
 
-function weight(level: number): number {
-  if (level <= 1) return 0.045;
-  if (level === 2) return 0.075;
-  return 0.11;
-}
-
 function payYields(s: State) {
   const me = actor(s);
-  const owned = s.nfts.filter(
-    (n) => n.owner !== null && !s.players[n.owner].bankrupt,
-  );
   if (s.feePot > 0) {
-    if (!owned.length) {
-      s.liquidity = r2(clamp(s.liquidity + 2, 0, 100));
-      pushLog(s, `交易費 ${money(s.feePot)} 沒人收，流回流動性`);
-      s.feePot = 0;
-    } else {
-      const sum = owned.reduce((a, n) => a + weight(n.level), 0);
-      const bits: string[] = [];
-      for (const n of owned) {
-        const share = r2(s.feePot * (weight(n.level) / sum));
-        s.players[n.owner!].cash = r2(s.players[n.owner!].cash + share);
-        bits.push(`${n.name} +${money(share)}`);
-      }
-      pushLog(s, `交易費分成 ${bits.join("、")}`);
-      s.feePot = 0;
-    }
+    s.liquidity = r2(clamp(s.liquidity + Math.min(6, s.feePot / 30), 0, 100));
+    pushLog(s, `交易費 ${money(s.feePot)} 流回流動性`);
+    s.feePot = 0;
   }
-  const flow = 6500 * (0.45 + s.liquidity / 100);
-  const ext: string[] = [];
-  for (const n of owned) {
-    const pay = r2(flow * weight(n.level));
-    if (pay < 1) continue;
-    s.players[n.owner!].cash = r2(s.players[n.owner!].cash + pay);
-    ext.push(`${s.players[n.owner!].name}·${n.name} +${money(pay)}`);
-  }
-  if (ext.length) pushLog(s, `外部流動 ${ext.join("、")}`);
-
   if (me.miner && !me.bankrupt) {
     const pay = r2(4 * (0.55 + s.liquidity / 200) * (1 - s.fear / 280));
     me.cash = r2(me.cash + pay);

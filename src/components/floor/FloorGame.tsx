@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Area,
   AreaChart,
@@ -40,6 +40,51 @@ function cx(...parts: Array<string | false | undefined>) {
   return parts.filter(Boolean).join(" ");
 }
 
+function useNightScore() {
+  const audio = useRef<HTMLAudioElement | null>(null);
+  const [on, setOn] = useState(true);
+  useEffect(() => {
+    let enabled = true;
+    try {
+      enabled = localStorage.getItem("coinpit-music") !== "0";
+    } catch {
+      enabled = true;
+    }
+    setOn(enabled);
+    const a = new Audio(`${import.meta.env.BASE_URL}music/night-pit.ogg`);
+    a.loop = true;
+    a.volume = 0.62;
+    audio.current = a;
+    const unlock = () => {
+      try {
+        if (localStorage.getItem("coinpit-music") === "0") return;
+      } catch {
+        /* ignore */
+      }
+      void a.play().catch(() => {});
+    };
+    window.addEventListener("pointerdown", unlock);
+    return () => {
+      window.removeEventListener("pointerdown", unlock);
+      a.pause();
+    };
+  }, []);
+  function toggle() {
+    const a = audio.current;
+    const next = !on;
+    setOn(next);
+    try {
+      localStorage.setItem("coinpit-music", next ? "1" : "0");
+    } catch {
+      /* ignore */
+    }
+    if (!a) return;
+    if (next) void a.play().catch(() => {});
+    else a.pause();
+  }
+  return { on, toggle };
+}
+
 export function FloorGame() {
   const solo = useFloor((s) => s.game);
   const saved = useFloor((s) => s.saved);
@@ -52,6 +97,7 @@ export function FloorGame() {
   const [nick, setNick] = useState("你");
   const [joinCode, setJoinCode] = useState("");
   const online = useOnline(net);
+  const music = useNightScore();
   const game = net ? (net.host ? solo : online.guestGame) : solo;
   const authority = !net || net.host;
   const localSeat = net ? (net.host ? 0 : online.mySeat) : 0;
@@ -154,10 +200,18 @@ export function FloorGame() {
       <main className="pit min-h-screen px-4 py-8 text-fg">
         <div className="mx-auto flex max-w-lg flex-col gap-6">
           <p className="font-mono text-xs tracking-widest text-primary">四人夜盤 · 模擬</p>
-          <h1 className="text-5xl font-medium tracking-tight">幣盤</h1>
+          <div className="flex items-end justify-between gap-3">
+            <h1 className="text-5xl font-medium tracking-tight">幣盤</h1>
+            <button
+              type="button"
+              onClick={music.toggle}
+              className="h-11 rounded-xl border border-line bg-surface px-3 text-sm"
+            >
+              {music.on ? "夜盤配樂 · 開" : "夜盤配樂 · 關"}
+            </button>
+          </div>
           <p className="text-base leading-relaxed text-muted">
-            價格 = 基本面 P* + 市場 PΔ。每名玩家結束回合收一根線。NFT
-            房不靠踩格收租，吃的是交易費和外部流動。
+            價格 = 基本面 P* + 市場 PΔ。每名玩家結束回合收一根線。冷庫、機房、天台、港口要等別人踩到才收租。
           </p>
           <ul className="flex flex-col gap-2 text-sm">
             <li className="rounded-xl border border-line bg-surface px-3 py-3">
@@ -168,6 +222,9 @@ export function FloorGame() {
             </li>
             <li className="rounded-xl border border-line bg-surface px-3 py-3">
               右上角盜錢包拿走現金 50%。擲出 6 可再擲，三連六直接過去。
+            </li>
+            <li className="rounded-xl border border-line bg-surface px-3 py-3">
+              房子一級過路費擲一顆骰，1–6 USDT。每升一級多一顆骰。升到二級要 150 USDT，之後每級再加 150。
             </li>
             <li className="rounded-xl border border-line bg-surface px-3 py-3">
               可跟朋友開房，空位由 AI 替補。淨值先到 100,000 USDT 即勝。
@@ -253,6 +310,13 @@ export function FloorGame() {
           <div className="flex gap-2">
             <button
               type="button"
+              onClick={music.toggle}
+              className="h-11 rounded-xl border border-line bg-surface px-3 text-sm"
+            >
+              {music.on ? "夜盤配樂 · 開" : "夜盤配樂 · 關"}
+            </button>
+            <button
+              type="button"
               onClick={() => setRules((v) => !v)}
               className="h-11 rounded-xl border border-line bg-surface px-3 text-sm"
             >
@@ -284,7 +348,8 @@ export function FloorGame() {
         {rules && (
           <section className="rounded-xl border border-line bg-surface p-4 text-sm leading-relaxed text-muted">
             棋盤順時針走。起點在右下角，空投在左下角。經過起點免費 20 USDT。
-            右上角盜錢包拿走現金 50%。恐貪開局鎖在 50，流動性居中。淨值跌破 15 會被平倉。
+            冷庫、機房、天台、港口只有別人踩到才收租。一級 1–6，每級多一顆骰。升級 150 起，每級加 150。
+            右上角盜錢包拿走現金 50%。恐貪開局鎖在 50，流動性居中。淨值跌破 15 會被平倉。配樂「夜盤」可在右上角關掉。
           </section>
         )}
 
