@@ -1,0 +1,62 @@
+@import "tailwindcss";
+
+@theme {
+  --color-bg: #08110e;
+  --color-surface: #10201a;
+  --color-surface-2: #173028;
+  --color-fg: #e8f6ee;
+  --color-muted: #93b5a4;
+  --color-primary: #3ee0a0;
+  --color-accent: #f0b429;
+  --color-danger: #ff5d73;
+  --color-line: #234237;
+  --font-sans: "Noto Sans TC", "IBM Plex Sans", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+  --radius: 0.85rem;
+}
+
+@layer base {
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+
+  html,
+  body {
+    background: var(--color-bg);
+    color: var(--color-fg);
+    font-family: var(--font-sans);
+  }
+}
+
+.pit {
+  background-color: var(--color-bg);
+  background-image: radial-gradient(var(--color-line) 0.7px, transparent 0.7px);
+  background-size: 18px 18px;
+}
+
+.tok-0 {
+  background: var(--color-primary);
+  color: var(--color-bg);
+}
+.tok-1 {
+  background: var(--color-accent);
+  color: var(--color-bg);
+}
+.tok-2 {
+  background: var(--color-fg);
+  color: var(--color-bg);
+}
+.tok-3 {
+  background: var(--color-muted);
+  color: var(--color-bg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}
