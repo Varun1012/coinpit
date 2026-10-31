@@ -116,8 +116,13 @@ function buildCoords(): ReadonlyArray<readonly [number, number]> {
 }
 
 export type Candle = { t: number; c: number };
-export type Phase = "need-roll" | "moving" | "need-choice" | "card" | "steal-roll" | "air-roll" | "over";
-export type Card = { title: string; body: string; mode: "info" | "pre-steal" };
+export type Phase = "need-roll" | "moving" | "need-choice" | "card" | "steal-roll" | "over";
+export type Card = {
+  title: string;
+  body: string;
+  mode: "info" | "jump";
+  jump?: number | "back3";
+};
 export type Opt = {
   id: string;
   label: string;
@@ -356,7 +361,7 @@ export function createGame(): State {
     feePot: 0,
     log: [
       "盤口開啟。四人各持 150 USDT。恐貪 50（越高越貪婪）、流動性居中。淨值先到 10,000，或讓其餘三人破產。",
-      "順時針，兩粒骰。空投骰只有一面 Free。停在盜錢包後，單骰連續三個 6 才能盜。",
+      "每次擲三顆：兩顆點數骰走路，一顆空投骰。踩到空投直接領。盜錢包要兩顆合計 12 點。",
     ],
     card: null,
     choiceHint: "",
@@ -372,73 +377,55 @@ function actor(s: State): Player {
 
 export function roll(state: State): State {
   if (state.players[state.turn].bankrupt) return state;
-  if (state.phase === "steal-roll") return rollStealDie(state);
-  if (state.phase === "air-roll") return rollAirDie(state);
+  if (state.phase === "steal-roll") return rollStealPair(state);
   if (state.phase !== "need-roll") return state;
   const s = structuredClone(state) as State;
   const a = 1 + Math.floor(Math.random() * 6);
   const b = 1 + Math.floor(Math.random() * 6);
+  const air = 1 + Math.floor(Math.random() * 6);
   s.faces = [a, b];
+  s.airFace = air;
   s.dice = a + b;
   s.stepsLeft = a + b;
   s.phase = "moving";
   const me = actor(s);
-  pushLog(s, `${me.name} 擲出 ${a} 與 ${b}`);
-  return s;
-}
-
-function rollAirDie(state: State): State {
-  const s = structuredClone(state) as State;
-  const d = 1 + Math.floor(Math.random() * 6);
-  s.airFace = d;
-  const me = actor(s);
-  if (d === 1) {
-    const c = COINS[Math.floor(Math.random() * 3)];
-    const value = r2(6 + Math.random() * 16);
-    const q = r4(value / s.prices[c]);
-    me.bags[c] = r4(me.bags[c] + q);
-    s.card = {
-      title: "空投 · Free",
-      body: `空投骰擲出 Free。${me.name} 收到 ${qty(q)} ${c}，約值 ${money(value)} USDT，直接進持倉。`,
-      mode: "info",
-    };
-    pushLog(s, `${me.name} 擲出 Free，空投 ${qty(q)} ${c}`);
+  const word = air === 1 ? "Free" : "X";
+  if (air === 1) {
+    const drop = giveCoins(s, me);
+    pushLog(s, `${me.name} 擲出 ${a} 與 ${b}，空投骰 Free，入帳 ${qty(drop.q)} ${drop.c}`);
   } else {
-    s.card = {
-      title: "空投 · X",
-      body: "這面是 X。六面裡只有一面寫 Free，其餘都不能領。",
-      mode: "info",
-    };
-    pushLog(s, `${me.name} 擲出 X，沒有空投`);
+    pushLog(s, `${me.name} 擲出 ${a} 與 ${b}，空投骰 X`);
   }
-  s.phase = "card";
   return s;
 }
 
-function rollStealDie(state: State): State {
+function giveCoins(s: State, me: Player): { c: Coin; q: number; value: number } {
+  const c = COINS[Math.floor(Math.random() * 3)];
+  const value = r2(8 + Math.random() * 18);
+  const q = r4(value / Math.max(0.0001, s.prices[c]));
+  me.bags[c] = r4(me.bags[c] + q);
+  return { c, q, value };
+}
+
+function rollStealPair(state: State): State {
   const s = structuredClone(state) as State;
-  const d = 1 + Math.floor(Math.random() * 6);
-  s.faces = [d, 0];
-  s.dice = d;
+  const a = 1 + Math.floor(Math.random() * 6);
+  const b = 1 + Math.floor(Math.random() * 6);
+  s.faces = [a, b];
+  s.airFace = 0;
+  s.dice = a + b;
   const me = actor(s);
-  if (d === 6) {
-    s.stealHits += 1;
-    pushLog(s, `${me.name} 在盜錢包擲出 6（第 ${s.stealHits} 粒）`);
-    if (s.stealHits >= 3) {
-      pushLog(s, `${me.name} 連續三個 6，可以盜錢包`);
-      return openSteal(s);
-    }
-    s.choiceHint = `已連續 ${s.stealHits} 個 6。還要再擲 ${3 - s.stealHits} 次，每次只擲一粒。`;
-    return s;
+  if (a + b === 12) {
+    pushLog(s, `${me.name} 擲出 ${a} 與 ${b}，合計 12，可以盜錢包`);
+    return openSteal(s);
   }
-  s.stealHits = 0;
   s.card = {
-    title: "盜錢包 · 未連中",
-    body: `${me.name} 擲出 ${d}，不是 6。連續中斷，這次不能盜。下一回合從這裡繼續走。`,
+    title: "盜錢包 · 點數不足",
+    body: `${me.name} 擲出 ${a} 與 ${b}，合計 ${a + b}。要兩顆點數骰加起來剛好 12 才能盜。`,
     mode: "info",
   };
   s.phase = "card";
-  pushLog(s, `${me.name} 擲出 ${d}，不是 6`);
+  pushLog(s, `${me.name} 擲出 ${a} 與 ${b}，合計 ${a + b}，沒有盜成`);
   return s;
 }
 
@@ -499,10 +486,14 @@ function land(s: State): State {
     return s;
   }
   if (tile.kind === "air") {
-    s.airFace = 0;
-    s.phase = "air-roll";
-    s.choiceHint = "空投骰六面只有一面是 Free，其餘是 X。擲中 Free 才收到幣。";
-    pushLog(s, `${me.name} 停在空投，準備擲空投骰`);
+    const drop = giveCoins(s, me);
+    s.card = {
+      title: "空投",
+      body: `踩到空投，直接入帳。${me.name} 收到 ${qty(drop.q)} ${drop.c}，約值 ${money(drop.value)} USDT。`,
+      mode: "info",
+    };
+    pushLog(s, `${me.name} 空投 ${qty(drop.q)} ${drop.c}`);
+    s.phase = "card";
     return s;
   }
   if (tile.kind === "tax") {
@@ -522,8 +513,8 @@ function land(s: State): State {
     s.faces = [0, 0];
     s.dice = 0;
     s.phase = "steal-roll";
-    s.choiceHint = "停在盜錢包。連續擲出三個 6（每次只擲一粒）才能拿走一名對手 50% 的 USDT。";
-    pushLog(s, `${me.name} 停在盜錢包，開始擲單骰`);
+    s.choiceHint = "停在盜錢包。擲兩顆點數骰，合計剛好 12 才能拿走一名對手 50% 的 USDT。";
+    pushLog(s, `${me.name} 停在盜錢包，擲兩顆點數骰`);
     return s;
   }
   if (tile.kind === "mine") {
@@ -588,78 +579,60 @@ function openSteal(s: State): State {
   if (!any) {
     s.card = {
       title: "盜錢包",
-      body: `${me.name} 連中三個 6，但其他人的 USDT 都不足 1。`,
+      body: `${me.name} 擲出 12 點，但其他人的 USDT 都不足 1。`,
       mode: "info",
     };
     s.phase = "card";
     return s;
   }
-  s.choiceHint = "三個 6 已連中。指定一名對手，拿走其 USDT 的 50%。幣與 NFT 不動。";
+  s.choiceHint = "兩顆點數骰合計 12。指定一名對手，拿走其 USDT 的 50%。幣與 NFT 不動。";
   s.phase = "need-choice";
   return s;
 }
 
 function applyFund(s: State) {
-  const rolln = Math.floor(Math.random() * 8);
+  const rolln = Math.floor(Math.random() * 10);
   const me = actor(s);
   if (rolln === 0) {
-    bumpBase(s, "BTC", 0.08);
-    s.card = {
-      title: "基本面 · 減半敘事",
-      body: "BTC 基本面 +8%。報價即時變，K 線要等這個回合收盤才畫上去。",
-      mode: "info",
-    };
+    me.cash = r2(me.cash + 40);
+    s.card = { title: "基本面 · 銀行出錯", body: "帳戶多了 40 USDT。跟大富翁那張「銀行出錯」一樣，直接入錢包。", mode: "info" };
   } else if (rolln === 1) {
-    bumpBase(s, "ETH", 0.07);
-    s.card = {
-      title: "基本面 · ETF 申購",
-      body: "ETH 基本面 +7%。",
-      mode: "info",
-    };
+    me.cash = r2(me.cash + 28);
+    s.card = { title: "基本面 · 股息", body: "持股分紅，收下 28 USDT。", mode: "info" };
   } else if (rolln === 2) {
-    bumpBase(s, "XRP", 0.12);
-    s.card = {
-      title: "基本面 · 支付牌照",
-      body: "XRP 基本面 +12%。",
-      mode: "info",
-    };
+    me.cash = r2(me.cash + 22);
+    s.card = { title: "基本面 · 顧問費", body: "有人請你看盤，顧問費 22 USDT。", mode: "info" };
   } else if (rolln === 3) {
-    for (const c of COINS) bumpBase(s, c, -0.06);
-    s.card = {
-      title: "基本面 · 監管函",
-      body: "三種基本面都 −6%。",
-      mode: "info",
-    };
+    const pay = r2(Math.min(me.cash, 25));
+    me.cash = r2(me.cash - pay);
+    s.card = { title: "基本面 · 住院費", body: `付出 ${money(pay)} USDT。`, mode: "info" };
   } else if (rolln === 4) {
-    bumpBase(s, "ETH", 0.05);
-    bumpBase(s, "XRP", 0.04);
-    s.card = {
-      title: "基本面 · 開發者回潮",
-      body: "ETH 基本面 +5%，XRP +4%。",
-      mode: "info",
-    };
+    me.cash = r2(me.cash + 36);
+    s.card = { title: "基本面 · 保險到期", body: "保單滿期，領回 36 USDT。", mode: "info" };
   } else if (rolln === 5) {
-    bumpBase(s, "BTC", -0.07);
-    s.card = {
-      title: "基本面 · 礦工離場",
-      body: "BTC 基本面 −7%。",
-      mode: "info",
-    };
+    const got = fromEach(s, 8);
+    s.card = { title: "基本面 · 生日", body: `每位對手給你 8 USDT，實收 ${money(got)}。`, mode: "info" };
   } else if (rolln === 6) {
-    s.liquidity = r2(clamp(s.liquidity + 12, 0, 100));
-    s.fear = r2(clamp(s.fear + 8, 0, 100));
+    const bill = repairBill(s);
     s.card = {
-      title: "基本面 · 穩定幣鑄造",
-      body: "流動性 +12，恐貪上升（更貪婪）。幣價基本面這張不動。",
+      title: "基本面 · 機房維修",
+      body: bill.houses
+        ? `${bill.houses} 間房子按等級計，應付 ${money(bill.due)}，實付 ${money(bill.pay)} USDT。`
+        : "你沒有房子，這張維修單不用付錢。",
       mode: "info",
     };
+  } else if (rolln === 7) {
+    bumpBase(s, "BTC", 0.08);
+    s.card = { title: "基本面 · 減半敘事", body: "BTC 基本面 +8%。報價即時變，K 線等回合收盤才畫上。", mode: "info" };
+  } else if (rolln === 8) {
+    for (const c of COINS) bumpBase(s, c, -0.06);
+    s.card = { title: "基本面 · 監管函", body: "三種基本面都 −6%。", mode: "info" };
   } else {
-    const c = COINS[Math.floor(Math.random() * 3)];
-    bumpBase(s, c, 0.06);
     s.card = {
-      title: "基本面 · 上幣公告",
-      body: `${c} 基本面 +6%。`,
-      mode: "info",
+      title: "基本面 · 前進到起點",
+      body: "直接去起點，並領 20 USDT。跟大富翁經過起點領薪水一樣。",
+      mode: "jump",
+      jump: 0,
     };
   }
   sync(s);
@@ -667,72 +640,96 @@ function applyFund(s: State) {
 }
 
 function applyMarketCard(s: State) {
-  const rolln = Math.floor(Math.random() * 8);
+  const rolln = Math.floor(Math.random() * 12);
   const me = actor(s);
   const coin = COINS[Math.floor(Math.random() * 3)];
+  const airAt = TILES.findIndex((t) => t.kind === "air");
+  const taxAt = TILES.findIndex((t) => t.kind === "tax");
+  const btcAt = nearestTile(me.pos, "spot", "BTC");
   if (rolln === 0) {
+    s.card = { title: "市場 · 退後三格", body: "棋子退回三格，落到哪一格就結算哪一格。", mode: "jump", jump: "back3" };
+  } else if (rolln === 1) {
+    s.card = { title: "市場 · 前往空投", body: "直接送到空投格，落地就領幣。", mode: "jump", jump: airAt };
+  } else if (rolln === 2) {
+    s.card = { title: "市場 · 前往交稅", body: "直接送到交稅，落地抽 10% USDT。", mode: "jump", jump: taxAt };
+  } else if (rolln === 3) {
+    s.card = { title: "市場 · 前往盜錢包", body: "直接送到右上角。到了再擲兩顆點數骰，合計 12 才能盜。", mode: "jump", jump: STEAL_AT };
+  } else if (rolln === 4) {
+    s.card = { title: "市場 · 最近的 BTC", body: "前進到下一個 BTC 現貨，可以在那裡買賣。", mode: "jump", jump: btcAt };
+  } else if (rolln === 5) {
+    const paid = toEach(s, 6);
+    s.card = { title: "市場 · 你是主席", body: `你要給每位對手 6 USDT，實付 ${money(paid)}。`, mode: "info" };
+  } else if (rolln === 6) {
+    const got = fromEach(s, 6);
+    s.card = { title: "市場 · 分紅", body: `每位對手給你 6 USDT，實收 ${money(got)}。`, mode: "info" };
+  } else if (rolln === 7) {
+    me.cash = r2(me.cash + 30);
+    s.card = { title: "市場 · 股票變現", body: "賣出一筆，收下 30 USDT。", mode: "info" };
+  } else if (rolln === 8) {
+    const pay = r2(Math.min(me.cash, 20));
+    me.cash = r2(me.cash - pay);
+    s.card = { title: "市場 · 超速罰款", body: `罰 ${money(pay)} USDT。`, mode: "info" };
+  } else if (rolln === 9) {
     s.fear = r2(clamp(s.fear - 16, 0, 100));
     for (const c of COINS) bumpDelta(s, c, -0.05);
-    s.card = {
-      title: "市場 · 恐懼蔓延",
-      body: "恐貪 −16，轉向恐懼。三種市場價 PΔ 各 −5% 基本面。",
-      mode: "info",
-    };
-  } else if (rolln === 1) {
+    s.card = { title: "市場 · 恐懼蔓延", body: "恐貪 −16。三種市場價各 −5% 基本面。", mode: "info" };
+  } else if (rolln === 10) {
     bumpDelta(s, coin, 0.1);
-    s.card = {
-      title: "市場 · 軋空",
-      body: `${coin} 市場價 +10% 基本面。`,
-      mode: "info",
-    };
-  } else if (rolln === 2) {
-    bumpDelta(s, coin, -0.12);
-    s.card = {
-      title: "市場 · 閃崩",
-      body: `${coin} 市場價 −12% 基本面。`,
-      mode: "info",
-    };
-  } else if (rolln === 3) {
-    s.fear = r2(clamp(s.fear + 14, 0, 100));
-    for (const c of COINS) bumpDelta(s, c, 0.04);
-    s.card = {
-      title: "市場 · 貪婪回歸",
-      body: "恐貪 +14，轉向貪婪。三種市場價各 +4% 基本面。",
-      mode: "info",
-    };
-  } else if (rolln === 4) {
-    s.liquidity = r2(clamp(s.liquidity - 16, 0, 100));
-    s.card = {
-      title: "市場 · 流動性枯竭",
-      body: "成交量掉一檔。流動性下降，下一根線會比較薄。",
-      mode: "info",
-    };
-  } else if (rolln === 5) {
-    s.liquidity = r2(clamp(s.liquidity + 12, 0, 100));
-    bumpDelta(s, coin, 0.07);
-    s.card = {
-      title: "市場 · 巨鯨入金",
-      body: `流動性上升，${coin} 市場價 +7% 基本面。`,
-      mode: "info",
-    };
-  } else if (rolln === 6) {
-    bumpDelta(s, coin, -0.08);
-    s.fear = r2(clamp(s.fear - 6, 0, 100));
-    s.card = {
-      title: "市場 · 假突破",
-      body: `${coin} 市場價 −8% 基本面，恐貪微降。`,
-      mode: "info",
-    };
+    s.card = { title: "市場 · 軋空", body: `${coin} 市場價 +10% 基本面。`, mode: "info" };
   } else {
-    for (const c of COINS) bumpDelta(s, c, 0.035);
     s.card = {
-      title: "市場 · 外部買盤",
-      body: "場外資金推進。三種市場價各 +3.5% 基本面。",
-      mode: "info",
+      title: "市場 · 前進到起點",
+      body: "行情把你送回起點，並領 20 USDT。",
+      mode: "jump",
+      jump: 0,
     };
   }
   sync(s);
   pushLog(s, `${me.name} 抽到「${s.card?.title ?? "市場"}」`);
+}
+
+function nearestTile(from: number, kind: TileKind, coin?: Coin): number {
+  for (let i = 1; i <= BOARD; i++) {
+    const idx = (from + i) % BOARD;
+    const tile = TILES[idx];
+    if (tile.kind === kind && (coin === undefined || tile.coin === coin)) return idx;
+  }
+  return from;
+}
+
+function fromEach(s: State, n: number): number {
+  const me = actor(s);
+  let got = 0;
+  s.players.forEach((p, i) => {
+    if (i === s.turn || p.bankrupt) return;
+    const pay = r2(Math.min(p.cash, n));
+    p.cash = r2(p.cash - pay);
+    got = r2(got + pay);
+  });
+  me.cash = r2(me.cash + got);
+  return got;
+}
+
+function toEach(s: State, n: number): number {
+  const me = actor(s);
+  let paid = 0;
+  s.players.forEach((p, i) => {
+    if (i === s.turn || p.bankrupt) return;
+    const pay = r2(Math.min(Math.max(0, me.cash), n));
+    me.cash = r2(me.cash - pay);
+    p.cash = r2(p.cash + pay);
+    paid = r2(paid + pay);
+  });
+  return paid;
+}
+
+function repairBill(s: State): { houses: number; due: number; pay: number } {
+  const me = actor(s);
+  const houses = s.nfts.filter((n) => n.owner === s.turn);
+  const due = houses.reduce((sum, n) => sum + 8 * n.level, 0);
+  const pay = r2(Math.min(me.cash, due));
+  me.cash = r2(me.cash - pay);
+  return { houses: houses.length, due, pay };
 }
 
 function bumpBase(s: State, c: Coin, pct: number) {
@@ -1081,11 +1078,20 @@ function p2pNft(s: State, index: number): boolean {
 export function dismissCard(state: State): State {
   if (state.phase !== "card" || !state.card) return state;
   const mode = state.card.mode;
+  const jump = state.card.jump;
   const s = structuredClone(state) as State;
   s.card = null;
-  if (mode === "pre-steal") {
-    actor(s).pos = STEAL_AT;
-    return openSteal(s);
+  if (mode === "jump") {
+    const me = actor(s);
+    if (jump === "back3") me.pos = (me.pos + BOARD - 3) % BOARD;
+    else if (typeof jump === "number") me.pos = jump;
+    if (jump === 0) {
+      me.cash = r2(me.cash + STIPEND);
+      pushLog(s, `${me.name} 被送到起點，領 ${money(STIPEND)} USDT`);
+      return settle(s);
+    }
+    pushLog(s, `${me.name} 被送到 ${TILES[me.pos].label}`);
+    return land(s);
   }
   return settle(s);
 }
