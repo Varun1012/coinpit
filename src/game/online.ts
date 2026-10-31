@@ -31,7 +31,7 @@ function emptySeats(selfId: string, name: string): Seat[] {
 
 export function useOnline(spec: NetSpec | null) {
   const [guestGame, setGuestGame] = useState<State | null>(null);
-  const [status, setStatus] = useState("連接房間…");
+  const [status, setStatus] = useState("正在接通房間…");
   const [roster, setRoster] = useState<string[]>(["你", "北區 · AI", "做市 · AI", "巨鯨 · AI"]);
   const [mySeat, setMySeat] = useState(0);
   const [failed, setFailed] = useState<string[]>([]);
@@ -51,7 +51,7 @@ export function useOnline(spec: NetSpec | null) {
       room: `pit${spec.code}`,
       selfId: mine,
       name: spec.name.slice(0, 24),
-      onConnected: () => setStatus(spec.host ? "房間已開。把號碼給朋友，空位由 AI 下。" : "已進房，等房主開局。"),
+      onConnected: () => setStatus(spec.host ? "房間已接通。把號碼給朋友，空位由 AI 下。" : "已進房，等房主按開局。"),
       onPeersChanged: (peers: PeerInfo[]) => {
         setFailed(peers.filter((p) => p.connectionState === "failed").map((p) => p.name || "對手"));
         if (!spec.host) {
@@ -113,17 +113,21 @@ export function useOnline(spec: NetSpec | null) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [spec]);
 
-  const hostGame = useFloor((s) => s.game);
-
   useEffect(() => {
-    if (!spec?.host || !hostGame) return;
-    roomRef.current?.send({
-      kind: "snap",
-      game: hostGame,
-      hostId: selfId.current,
-      seats: seatsRef.current.map((s) => ({ peerId: s.peerId })),
-    } satisfies Snap);
-  }, [spec?.host, hostGame]);
+    if (!spec?.host) return;
+    const t = setInterval(() => {
+      const latest = useFloor.getState().game;
+      const room = roomRef.current;
+      if (!latest || !room) return;
+      room.send({
+        kind: "snap",
+        game: latest,
+        hostId: selfId.current,
+        seats: seatsRef.current.map((s) => ({ peerId: s.peerId })),
+      } satisfies Snap);
+    }, 1000);
+    return () => clearInterval(t);
+  }, [spec?.host]);
 
   function begin() {
     if (!spec?.host) return;

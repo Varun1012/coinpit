@@ -9,6 +9,8 @@
  * rolls back and accepts, so pairs converge without wedging.
  */
 
+import type { MqttRelay } from "./mqtt-relay";
+
 export type SignalKind = "offer" | "answer" | "ice";
 
 /**
@@ -106,6 +108,8 @@ export class P2PRoom {
   private closed = false;
   private everPolled = false;
   private lastPeersFingerprint = "";
+  private relay: MqttRelay | null = null;
+  private relayReady: Promise<void> | null = null;
 
   constructor(opts: P2PRoomOptions) {
     this.opts = opts;
@@ -117,6 +121,7 @@ export class P2PRoom {
    * room: the loop and timers start regardless and the next poll retries.
    */
   async join(): Promise<void> {
+    await this.ensureRelay();
     try {
       await this.pollOnce();
     } catch {
@@ -130,14 +135,41 @@ export class P2PRoom {
     }, PING_INTERVAL_MS);
   }
 
+  private async ensureRelay(): Promise<void> {
+    if (this.relay || this.closed) return;
+    if (!this.relayReady) {
+      this.relayReady = (async () => {
+        const { MqttRelay } = await import("./mqtt-relay");
+        let last: unknown;
+        for (let i = 0; i < 2 && !this.closed; i++) {
+          const relay = new MqttRelay(this.opts.room, this.opts.selfId, this.opts.name ?? "");
+          try {
+            await relay.start();
+            if (this.closed) {
+              relay.close();
+              return;
+            }
+            this.relay = relay;
+            return;
+          } catch (err) {
+            last = err;
+            relay.close();
+          }
+        }
+        console.warn("[p2p] public relay unavailable", last);
+      })();
+    }
+    await this.relayReady;
+  }
+
   close(): void {
     this.closed = true;
     if (this.pollTimer) clearTimeout(this.pollTimer);
     if (this.pingTimer) clearInterval(this.pingTimer);
     for (const slot of this.peers.values()) slot.pc.close();
     this.peers.clear();
-    // Leaving the roster is the teardown broadcast: everyone's next poll
-    // drops this peer and closes their side of the pair.
+    this.relay?.close();
+    this.relay = null;
     void fetch("/api/rtc", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -186,6 +218,23 @@ export class P2PRoom {
   }
 
   private async pollOnce(): Promise<void> {
+    if (!this.relay) await this.ensureRelay();
+    if (this.relay) {
+      const body = this.relay.take(this.cursor);
+      if (this.closed) return;
+      if (!this.everPolled) {
+        this.everPolled = true;
+        this.opts.onConnected?.();
+      }
+      this.reconcileRoster(body.peers);
+      const roster = new Set(body.peers.map((p) => p.id));
+      for (const sig of body.signals) {
+        this.cursor = Math.max(this.cursor, sig.id);
+        await this.onSignal(sig.from, sig.kind, sig.payload, roster);
+        if (this.closed) return;
+      }
+      return;
+    }
     const params = new URLSearchParams({
       room: this.opts.room,
       peer: this.opts.selfId,
@@ -448,6 +497,10 @@ export class P2PRoom {
     for (let attempt = 0; ; attempt++) {
       if (this.closed) return;
       try {
+        if (this.relay) {
+          this.relay.publish(to, kind, payload);
+          return;
+        }
         const res = await fetch("/api/rtc", {
           method: "POST",
           headers: { "content-type": "application/json" },
