@@ -115,7 +115,7 @@ function buildCoords(): ReadonlyArray<readonly [number, number]> {
   return cells;
 }
 
-export type Candle = { t: number; c: number };
+export type Candle = { t: number; o: number; h: number; l: number; c: number };
 export type Phase = "need-roll" | "moving" | "need-choice" | "card" | "steal-roll" | "over";
 export type Card = {
   title: string;
@@ -158,12 +158,6 @@ export type State = {
   winner: number | null;
   winReason: WinReason;
   tick: number;
-};
-
-const SPOT_QTY: Record<Coin, number[]> = {
-  BTC: [0.5, 1, 2],
-  ETH: [3, 8, 16],
-  XRP: [30, 80, 200],
 };
 
 export function money(n: number): string {
@@ -261,14 +255,25 @@ export function netWorth(s: State, i: number): number {
 
 function walk(base: number): { hist: Candle[]; delta: number; price: number } {
   const hist: Candle[] = [];
-  let delta = 0;
+  let price = base;
   for (let i = 0; i < 16; i++) {
+    const open = price;
     const shock = clamp(gauss() * base * 0.014, -base * 0.045, base * 0.045);
-    delta = delta * 0.88 + shock;
-    hist.push({ t: i, c: quote(base, delta) });
+    price = quote(base, price - base + shock);
+    const wick = Math.abs(shock) * 0.45;
+    hist.push(bar(i, open, price, wick));
   }
-  const price = hist[hist.length - 1].c;
   return { hist, delta: r2(price - base), price };
+}
+
+function bar(t: number, open: number, close: number, wick: number): Candle {
+  return {
+    t,
+    o: r4(open),
+    h: r4(Math.max(open, close) + wick),
+    l: r4(Math.max(0.0001, Math.min(open, close) - wick)),
+    c: r4(close),
+  };
 }
 
 export function createGame(): State {
@@ -826,31 +831,26 @@ function nftOptions(s: State, index: number): Opt[] {
 function spotOptions(s: State, c: Coin): Opt[] {
   const me = actor(s);
   const price = s.prices[c];
+  const steps = [0.1, 0.5, 1, 2, 5];
   const opts: Opt[] = [];
-  for (const q of SPOT_QTY[c]) {
-    const notional = q * price;
-    const cost = notional * (1 + FEE);
+  for (const q of steps) {
+    const cost = q * price * (1 + FEE);
     opts.push({
       id: `buy:${c}:${q}`,
       label: `買 ${qty(q)}`,
-      detail:
-        me.cash >= cost
-          ? `${money(cost)} 含費`
-          : "USDT 不夠",
+      detail: me.cash >= cost ? `${money(cost)} 含費` : "USDT 不夠",
       tone: "primary",
       disabled: me.cash < cost,
     });
   }
-  for (const frac of [0.25, 0.5, 1]) {
-    const q = me.bags[c] * frac;
+  for (const q of steps) {
     const notional = q * price;
-    const label = frac === 1 ? "全賣" : `賣 ${Math.round(frac * 100)}%`;
     opts.push({
-      id: `sell:${c}:${frac}`,
-      label,
-      detail: notional >= 1 ? `約 ${money(notional * (1 - FEE))} 入袋` : "持倉太少",
+      id: `sell:${c}:${q}`,
+      label: `賣 ${qty(q)}`,
+      detail: me.bags[c] + 1e-9 >= q ? `約 ${money(notional * (1 - FEE))} 入袋` : "持倉太少",
       tone: "ghost",
-      disabled: notional < 1,
+      disabled: me.bags[c] + 1e-9 < q,
     });
   }
   opts.push({ id: "skip", label: "不交易", detail: "去收線", tone: "ghost" });
@@ -921,6 +921,17 @@ function richestOther(s: State): Player | null {
 
 export function applyOption(state: State, id: string): State {
   if (state.phase !== "need-choice") return state;
+  const s0 = state;
+  const me0 = s0.players[s0.turn];
+  const tile0 = TILES[me0.pos];
+  const parts0 = id.split(":");
+  if ((parts0[0] === "buy" || parts0[0] === "sell") && tile0.kind === "spot" && tile0.coin === parts0[1]) {
+    const n = Math.round(Number(parts0[2]) * 10) / 10;
+    if (!Number.isFinite(n) || n < 0.1) return state;
+    const s = structuredClone(state) as State;
+    if (!spotTrade(s, parts0[1] as Coin, parts0[0], n)) return state;
+    return settle(s);
+  }
   const opts = currentOptions(state);
   const opt = opts.find((o) => o.id === id);
   if (!opt || opt.disabled) return state;
@@ -1005,9 +1016,9 @@ function spotTrade(s: State, c: Coin, side: "buy" | "sell", n: number): boolean 
     pushLog(s, `${me.name} 買入 ${qty(n)} ${c} @ ${px(price)}`);
     return true;
   }
-  const q = r4(me.bags[c] * n);
+  const q = Math.min(me.bags[c], Math.round(n * 10) / 10);
   const notional = q * price;
-  if (notional < 1) return false;
+  if (q < 0.1) return false;
   const fee = notional * FEE;
   me.bags[c] = r4(me.bags[c] - q);
   me.cash = r2(me.cash + notional - fee);
@@ -1140,7 +1151,7 @@ export function aiPick(s: State, opts: Opt[]): string {
     const target = c === "BTC" ? 1 : c === "ETH" ? 8 : 80;
     if (me.style === "mm") {
       if (me.bags[c] > target * 1.25) {
-        const sell = live.find((o) => o.id === `sell:${c}:0.25`);
+        const sell = live.find((o) => o.id === `sell:${c}:0.5`) ?? live.find((o) => o.id.startsWith(`sell:${c}:`));
         if (sell) return sell.id;
       }
       if (me.bags[c] < target * 0.75 && price < avg * 1.04) {
@@ -1155,13 +1166,13 @@ export function aiPick(s: State, opts: Opt[]): string {
         if (buy) return buy.id;
       }
       if ((price > avg * 1.18 || s.fear < 28) && me.bags[c] > 0) {
-        const sell = live.find((o) => o.id === `sell:${c}:0.25` || o.id === `sell:${c}:0.5`);
+        const sell = live.find((o) => o.id === `sell:${c}:0.5`) ?? live.find((o) => o.id.startsWith(`sell:${c}:`));
         if (sell) return sell.id;
       }
       return skip?.id ?? live[0].id;
     }
     if (s.fear < 32 && me.bags[c] > 0) {
-      const sell = live.find((o) => o.id === `sell:${c}:0.5`) ?? live.find((o) => o.id.startsWith("sell:"));
+      const sell = live.find((o) => o.id === `sell:${c}:0.5`) ?? live.find((o) => o.id.startsWith(`sell:${c}:`));
       if (sell) return sell.id;
     }
     if (price < avg * 0.97 && s.fear > 42) {
@@ -1218,7 +1229,10 @@ function shock(s: State) {
   s.liquidity = r2(clamp(s.liquidity * 0.92 + 58 * 0.08 + avg * 36, 8, 98));
   s.tick += 1;
   for (const c of COINS) {
-    s.hist[c] = [...s.hist[c], { t: s.tick, c: s.prices[c] }].slice(-36);
+    const open = prev[c];
+    const close = s.prices[c];
+    const wick = Math.abs(close - open) * 0.35 + open * 0.004;
+    s.hist[c] = [...s.hist[c], bar(s.tick, open, close, wick)].slice(-36);
   }
   pushLog(
     s,

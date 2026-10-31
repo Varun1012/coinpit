@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import * as L from "./logic";
 
-const KEY = "coinpit-v5";
+const KEY = "coinpit-v6";
 
 type Store = {
   game: L.State | null;

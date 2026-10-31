@@ -1,18 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import {
-  Area,
-  AreaChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
-import {
   COINS,
   COORDS,
   TILES,
   WIN,
   type Coin,
+  type Candle,
   type Opt,
   type State,
   currentOptions,
@@ -43,7 +36,7 @@ function useNightScore() {
       enabled = true;
     }
     setOn(enabled);
-    const a = new Audio(`${import.meta.env.BASE_URL}music/night-pit.ogg`);
+    const a = new Audio(`${import.meta.env.BASE_URL}music/sunny-pit.ogg`);
     a.loop = true;
     a.volume = 0.62;
     audio.current = a;
@@ -85,6 +78,7 @@ export function FloorGame() {
   const start = useFloor((s) => s.start);
   const resume = useFloor((s) => s.resume);
   const [coin, setCoin] = useState<Coin>("BTC");
+  const [tf, setTf] = useState<1 | 36>(36);
   const [rules, setRules] = useState(false);
   const [net, setNet] = useState<NetSpec | null>(null);
   const [nick, setNick] = useState("你");
@@ -308,7 +302,7 @@ export function FloorGame() {
 
   return (
     <main className="pit relative h-dvh overflow-hidden text-fg">
-      <div className="mx-auto flex h-full w-full max-w-[1600px] flex-col gap-2 px-2 py-2 lg:px-3">
+      <div className="play-shell mx-auto flex h-full w-full max-w-[1600px] flex-col gap-2 px-2 py-2 lg:px-3">
         <header className="flex shrink-0 items-center justify-between gap-2">
           <div className="flex items-baseline gap-3">
             <h1 className="text-lg font-medium">幣盤</h1>
@@ -352,14 +346,14 @@ export function FloorGame() {
           </section>
         )}
 
-        <div className="grid min-h-0 flex-1 grid-cols-1 grid-rows-[minmax(0,1fr)_auto] gap-2 lg:grid-cols-[minmax(0,1fr)_22rem] lg:grid-rows-1">
+        <div className="grid min-h-0 flex-1 grid-cols-1 grid-rows-[minmax(0,1fr)_auto] gap-2">
           <div className="board-slot min-h-0">
             <div className="board-frame">
               <Board game={game} />
             </div>
           </div>
 
-          <div className="flex min-h-0 flex-col gap-2 overflow-hidden">
+          <div className="side-dock flex min-h-0 flex-col gap-2 overflow-hidden">
             <Roster game={game} onSteal={actPick} />
             <Dock
               game={game}
@@ -371,10 +365,23 @@ export function FloorGame() {
             />
             <section className="hidden min-h-0 flex-1 flex-col rounded-2xl border border-line bg-surface p-3 lg:flex">
               <div className="mb-1 flex items-end justify-between gap-2">
-                <p className={cx("font-mono text-lg", up ? "text-primary" : "text-danger")}>
+                <p className={cx("font-mono text-lg", up ? "text-danger" : "text-primary")}>
                   {coin} {px(game.prices[coin])}
                 </p>
                 <div className="flex gap-1">
+                  {([1, 36] as const).map((n) => (
+                    <button
+                      key={n}
+                      type="button"
+                      onClick={() => setTf(n)}
+                      className={cx(
+                        "h-8 rounded-lg px-2 font-mono text-[10px]",
+                        tf === n ? "bg-accent text-bg" : "border border-line text-muted",
+                      )}
+                    >
+                      {n}格
+                    </button>
+                  ))}
                   {COINS.map((c) => (
                     <button
                       key={c}
@@ -391,31 +398,7 @@ export function FloorGame() {
                 </div>
               </div>
               <div className="min-h-0 flex-1">
-                <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={game.hist[coin].map((h) => ({ t: h.t, 價格: h.c }))}>
-                    <XAxis dataKey="t" hide />
-                    <YAxis hide domain={["auto", "auto"]} />
-                    <Tooltip
-                      contentStyle={{
-                        background: "var(--color-surface-2)",
-                        border: "1px solid var(--color-line)",
-                        borderRadius: 12,
-                        color: "var(--color-fg)",
-                        fontSize: 12,
-                      }}
-                    />
-                    <Area
-                      type="monotone"
-                      dataKey="價格"
-                      stroke={up ? "var(--color-primary)" : "var(--color-danger)"}
-                      fill={up ? "var(--color-primary)" : "var(--color-danger)"}
-                      fillOpacity={0.16}
-                      strokeWidth={2}
-                      dot={false}
-                      isAnimationActive={false}
-                    />
-                  </AreaChart>
-                </ResponsiveContainer>
+                <CandleChart game={game} coin={coin} bars={tf} />
               </div>
             </section>
             <section className="hidden min-h-0 flex-1 overflow-y-auto rounded-2xl border border-line bg-surface p-3 font-mono text-xs leading-relaxed lg:block">
@@ -545,6 +528,127 @@ function tilePaint(tile: (typeof TILES)[number]): { bg: string; band: string; in
   return { bg: faces[i % faces.length], band: bands[i % bands.length], ink: "#1c1917" };
 }
 
+function TradeSlider({
+  game,
+  coin,
+  onPick,
+}: {
+  game: State;
+  coin: Coin;
+  onPick: (id: string) => void;
+}) {
+  const me = game.players[game.turn];
+  const price = game.prices[coin];
+  const maxBuy = Math.max(0, Math.floor((me.cash / (price * 1.025)) * 10) / 10);
+  const maxSell = Math.max(0, Math.floor(me.bags[coin] * 10) / 10);
+  const [side, setSide] = useState<"buy" | "sell">("buy");
+  const max = side === "buy" ? maxBuy : maxSell;
+  const [raw, setRaw] = useState(0.1);
+  const qty = max < 0.1 ? 0 : Math.min(max, Math.max(0.1, Math.round(raw * 10) / 10));
+  const usdt = qty * price * (side === "buy" ? 1.025 : 0.975);
+  return (
+    <div className="mt-2">
+      <div className="grid grid-cols-2 gap-2">
+        <button
+          type="button"
+          onClick={() => setSide("buy")}
+          className={cx("h-9 rounded-lg text-sm", side === "buy" ? "bg-primary text-bg" : "border border-line")}
+        >
+          買入
+        </button>
+        <button
+          type="button"
+          onClick={() => setSide("sell")}
+          className={cx("h-9 rounded-lg text-sm", side === "sell" ? "bg-accent text-bg" : "border border-line")}
+        >
+          賣出
+        </button>
+      </div>
+      <input
+        type="range"
+        min={0.1}
+        max={Math.max(0.1, max)}
+        step={0.1}
+        value={qty || 0.1}
+        disabled={max < 0.1}
+        onChange={(e) => setRaw(Number(e.target.value))}
+        className="mt-3 w-full accent-[#3ee0a0]"
+        aria-label="交易數量"
+      />
+      <p className="mt-1 font-mono text-xs text-muted">
+        {qty.toFixed(1)} {coin} · {money(usdt)} USDT
+      </p>
+      <div className="mt-2 grid grid-cols-2 gap-2">
+        <button
+          type="button"
+          disabled={qty < 0.1}
+          onClick={() => onPick(`${side}:${coin}:${qty.toFixed(1)}`)}
+          className="h-11 rounded-xl bg-primary font-medium text-bg disabled:opacity-40"
+        >
+          確認
+        </button>
+        <button
+          type="button"
+          onClick={() => onPick("skip")}
+          className="h-11 rounded-xl border border-line"
+        >
+          不交易
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function CandleChart({ game, coin, bars }: { game: State; coin: Coin; bars: 1 | 36 }) {
+  const hist = game.hist[coin] ?? [];
+  const last = hist[hist.length - 1];
+  const now = game.prices[coin];
+  const live: Candle | null =
+    last && Math.abs(now - last.c) > 1e-6
+      ? {
+          t: game.tick + 1,
+          o: last.c,
+          h: Math.max(last.c, now),
+          l: Math.min(last.c, now),
+          c: now,
+        }
+      : null;
+  const all = live ? [...hist, live] : hist;
+  const data = (bars === 1 ? all.slice(-1) : all.slice(-36)).map((d) => ({
+    t: d.t,
+    o: d.o ?? d.c,
+    h: d.h ?? d.c,
+    l: d.l ?? d.c,
+    c: d.c,
+  }));
+  if (!data.length) return null;
+  const hi = Math.max(...data.map((d) => d.h));
+  const lo = Math.min(...data.map((d) => d.l));
+  const span = Math.max(hi - lo, hi * 0.012, 0.0001);
+  const W = 360;
+  const H = 148;
+  const slot = W / data.length;
+  const y = (v: number) => 10 + ((hi - v) / span) * (H - 20);
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} className="h-full w-full" role="img" aria-label={`${coin} 陰陽燭`}>
+      {data.map((d, i) => {
+        const yang = d.c >= d.o;
+        const color = yang ? "#ff4d5e" : "#3ee0a0";
+        const x = i * slot + slot / 2;
+        const top = y(Math.max(d.o, d.c));
+        const bot = y(Math.min(d.o, d.c));
+        const bw = Math.max(3, slot * 0.55);
+        return (
+          <g key={`${d.t}-${i}`}>
+            <line x1={x} x2={x} y1={y(d.h)} y2={y(d.l)} stroke={color} strokeWidth="1.5" />
+            <rect x={x - bw / 2} y={top} width={bw} height={Math.max(1.6, bot - top)} fill={color} rx="0.6" />
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
 function meName(game: State) {
   return game.players[game.turn].name;
 }
@@ -667,6 +771,9 @@ function Dock({
           <h2 className="text-sm font-medium">{TILES[me.pos].label}</h2>
           <p className="mt-1 text-sm leading-relaxed text-muted">{game.choiceHint}</p>
           {human ? (
+            TILES[me.pos].kind === "spot" && TILES[me.pos].coin ? (
+              <TradeSlider game={game} coin={TILES[me.pos].coin!} onPick={onPick} />
+            ) : (
             <div className="mt-2 grid max-h-28 grid-cols-2 gap-2 overflow-y-auto">
               {opts.map((o) => (
                 <button
@@ -694,6 +801,7 @@ function Dock({
                 </button>
               ))}
             </div>
+            )
           ) : (
             <p className="mt-3 font-mono text-xs text-muted">{me.name} 在決定</p>
           )}

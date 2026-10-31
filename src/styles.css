@@ -26,6 +26,23 @@
     background: var(--color-bg);
     color: var(--color-fg);
     font-family: var(--font-sans);
+    user-select: none;
+    -webkit-user-select: none;
+  }
+}
+
+@media (min-width: 1024px) {
+  .play-shell {
+    padding-right: 23rem;
+  }
+
+  .side-dock {
+    position: fixed;
+    top: 3.1rem;
+    right: 0.6rem;
+    bottom: 0.5rem;
+    z-index: 15;
+    width: 22rem;
   }
 }
 
