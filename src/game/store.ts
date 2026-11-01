@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import * as L from "./logic";
 
-const KEY = "coinpit-v7";
+const KEY = "coinpit-v8";
 
 type Store = {
   game: L.State | null;
@@ -88,6 +88,21 @@ export const useFloor = create<Store>((set, get) => ({
   pick: (id: string) => {
     const g = get().game;
     if (!g) return;
+    if (id.startsWith("offer:") && g.phase === "need-roll") {
+      const [, to, nft, price, side] = id.split(":");
+      const next = L.proposeTrade(g, Number(to), Number(nft), Number(price), side === "buy" ? "buy" : "sell");
+      if (next === g) return;
+      persist(next);
+      set({ game: next });
+      return;
+    }
+    if (g.phase === "trade" && (id === "trade-yes" || id === "trade-no")) {
+      const next = L.resolveTrade(g, id === "trade-yes");
+      if (next === g) return;
+      persist(next);
+      set({ game: next });
+      return;
+    }
     const next = L.applyOption(g, id);
     if (next === g) return;
     persist(next);
@@ -96,6 +111,15 @@ export const useFloor = create<Store>((set, get) => ({
   ai: () => {
     const g = get().game;
     if (!g || g.phase === "over" || g.phase === "moving") return;
+    if (g.phase === "trade" && g.trade) {
+      const target = g.players[g.trade.to];
+      if (!target || target.human) return;
+      const next = L.resolveTrade(g, L.aiTrade(g));
+      if (next === g) return;
+      persist(next);
+      set({ game: next });
+      return;
+    }
     const p = g.players[g.turn];
     if (p.human || p.bankrupt) return;
     let next = g;

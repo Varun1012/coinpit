@@ -8,12 +8,35 @@ export const MINE_COST = 36;
 export const FEE = 0.025;
 export const BOARD = 40;
 export const STEAL_AT = 30;
-export const MAX_NFT_LEVEL = 6;
+export const MAX_NFT_LEVEL = 5;
 export const JAIL_FINE = 50;
 
-/** 升到下一級的價錢。一級升二級 150，之後每級再加 150。 */
-export function upgradeCost(level: number): number {
-  return 150 * level;
+/** 每升一等固定 150 USDT。要先集齊同一排。 */
+export function upgradeCost(_level?: number): number {
+  return 150;
+}
+
+export const RARITIES = ["N", "R", "SR", "SSR"] as const;
+export type Rarity = (typeof RARITIES)[number];
+
+const RENT_MULT: Record<Rarity, readonly number[]> = {
+  N: [1, 2, 4, 8, 16],
+  R: [2, 4, 8, 16, 32],
+  SR: [3, 9, 27, 81, 243],
+  SSR: [4, 16, 64, 256, 1024],
+};
+
+export function rarityOf(nftIndex: number): Rarity {
+  return RARITIES[Math.min(3, Math.floor(Math.max(0, nftIndex) / 3))];
+}
+
+export function sameSet(nftIndex: number): number[] {
+  const start = Math.floor(nftIndex / 3) * 3;
+  return [start, start + 1, start + 2];
+}
+
+export function ownsSet(s: State, seat: number, nftIndex: number): boolean {
+  return sameSet(nftIndex).every((i) => s.nfts[i]?.owner === seat);
 }
 
 const INITIAL: Record<Coin, number> = { BTC: 28, ETH: 4.6, XRP: 0.28 };
@@ -123,7 +146,7 @@ function buildCoords(): ReadonlyArray<readonly [number, number]> {
 }
 
 export type Candle = { t: number; o: number; h: number; l: number; c: number };
-export type Phase = "need-roll" | "moving" | "need-choice" | "card" | "steal-roll" | "jail" | "over";
+export type Phase = "need-roll" | "moving" | "need-choice" | "card" | "steal-roll" | "jail" | "trade" | "over";
 export type Card = {
   title: string;
   body: string;
@@ -136,6 +159,14 @@ export type Opt = {
   detail: string;
   tone: "primary" | "ghost" | "danger";
   disabled?: boolean;
+};
+
+export type TradeOffer = {
+  from: number;
+  to: number;
+  nft: number;
+  price: number;
+  side: "sell" | "buy";
 };
 
 export type WinReason = "net" | "wipe" | null;
@@ -161,6 +192,7 @@ export type State = {
   feePot: number;
   log: string[];
   card: Card | null;
+  trade: TradeOffer | null;
   choiceHint: string;
   winner: number | null;
   winReason: WinReason;
@@ -390,6 +422,7 @@ export function createGame(): State {
       "每次擲三顆：兩顆點數骰顯示 1 到 6，一顆空投骰。兩顆相同就再擲一次。連續三次相同，送到空投坐牢。",
     ],
     card: null,
+    trade: null,
     choiceHint: "",
     winner: null,
     winReason: null,
@@ -562,19 +595,24 @@ export function step(state: State): State {
 function chargeRent(s: State, nft: Nft): State {
   const me = actor(s);
   const owner = s.players[nft.owner!];
-  const faces: number[] = [];
-  for (let i = 0; i < nft.level; i++) faces.push(1 + Math.floor(Math.random() * 6));
-  const sum = faces.reduce((a, b) => a + b, 0);
-  const pay = r2(Math.min(me.cash, sum));
+  const index = s.nfts.findIndex((n) => n.key === nft.key);
+  const rarity = rarityOf(index);
+  const a = die();
+  const b = die();
+  const sum = a + b;
+  const mult = RENT_MULT[rarity][Math.min(MAX_NFT_LEVEL, nft.level) - 1] ?? 1;
+  const due = sum * mult;
+  const pay = r2(Math.min(me.cash, due));
   me.cash = r2(me.cash - pay);
   if (!owner.bankrupt) owner.cash = r2(owner.cash + pay);
-  const shown = faces.join(" + ");
+  s.faces = [a, b];
+  s.dice = sum;
   s.card = {
-    title: `${nft.name} · 骰 ${shown}`,
-    body: `${nft.level} 級過路費。${me.name} 踩到 ${owner.name} 的房子，擲出 ${shown} = ${sum} USDT，實付 ${money(pay)}。自己踩到不收租。`,
+    title: `${nft.name} · ${rarity} 第${nft.level}等`,
+    body: `點數 ${a}+${b}=${sum} × ${mult} = ${due} USDT。${me.name} 實付 ${money(pay)} 給 ${owner.name}。`,
     mode: "info",
   };
-  pushLog(s, `${me.name} 踩中 ${owner.name} 的${nft.name}，骰 ${shown}，付 ${money(pay)}`);
+  pushLog(s, `${me.name} 踩中${nft.name}，${sum}×${mult}，付 ${money(pay)}`);
   s.phase = "card";
   return s;
 }
@@ -659,22 +697,26 @@ function land(s: State): State {
   if (tile.kind === "nft" && tile.nft !== undefined) {
     const nft = s.nfts[tile.nft];
     if (nft.owner === null) {
-      s.choiceHint = `${nft.name} 沒人持有。買下之後，其他玩家踩到才收租：一級擲一顆骰，1–6 USDT，每升一級多一顆。`;
+      const rare = rarityOf(tile.nft);
+      s.choiceHint = `${nft.name} 是 ${rare} 排，沒人持有。買下之後，別人踩到才收租：點數之和 × 該等加成。`;
       s.phase = "need-choice";
       return s;
     }
     if (nft.owner === s.turn) {
+      const rare = rarityOf(tile.nft);
       if (nft.level >= MAX_NFT_LEVEL) {
         s.card = {
           title: nft.name,
-          body: `已是 ${MAX_NFT_LEVEL} 級。別人踩到會擲 ${MAX_NFT_LEVEL} 顆骰。自己踩到不收租。`,
+          body: `已是 ${rare} 第五等。別人踩到按點數之和 × ${RENT_MULT[rare][4]} 收租。自己踩到不收。`,
           mode: "info",
         };
         s.phase = "card";
         return s;
       }
-      const cost = upgradeCost(nft.level);
-      s.choiceHint = `這是你的${nft.name}，${nft.level} 級。升到 ${nft.level + 1} 級要 ${money(cost)} USDT，過路費改為擲 ${nft.level + 1} 顆骰。`;
+      const ready = ownsSet(s, s.turn, tile.nft);
+      s.choiceHint = ready
+        ? `已集齊 ${rare}。${nft.name} 第 ${nft.level} 等，升一等要 ${money(upgradeCost())} USDT。`
+        : `這是你的${nft.name}（${rare}）。要先集齊這一排三棟，才能花 ${money(upgradeCost())} 升一等。`;
       s.phase = "need-choice";
       return s;
     }
@@ -957,17 +999,18 @@ function nftOptions(s: State, index: number): Opt[] {
       { id: "skip", label: "不買", detail: "讓它空著", tone: "ghost" },
     ];
   }
-  const cost = upgradeCost(nft.level);
-  const afford = me.cash >= cost && nft.level < MAX_NFT_LEVEL;
+  const cost = upgradeCost();
+  const ready = ownsSet(s, s.turn, index);
+  const afford = me.cash >= cost && nft.level < MAX_NFT_LEVEL && ready;
   return [
     {
       id: "nft-up",
-      label: `升到 ${nft.level + 1} 級`,
-      detail: nft.level >= MAX_NFT_LEVEL ? "已滿級" : afford ? `${money(cost)} USDT` : "USDT 不夠",
+      label: `升到第 ${nft.level + 1} 等`,
+      detail: nft.level >= MAX_NFT_LEVEL ? "已是第五等" : !ready ? `先集齊 ${rarityOf(index)}` : afford ? `${money(cost)} USDT` : "USDT 不夠",
       tone: "primary",
       disabled: !afford,
     },
-    { id: "skip", label: "不升級", detail: "維持現有骰數", tone: "ghost" },
+    { id: "skip", label: "不升級", detail: ready ? "維持這一等" : "還沒集齊這一排", tone: "ghost" },
   ];
 }
 
@@ -1062,6 +1105,53 @@ function richestOther(s: State): Player | null {
   return best;
 }
 
+export function proposeTrade(state: State, to: number, nft: number, price: number, side: "sell" | "buy"): State {
+  if (state.phase !== "need-roll") return state;
+  const house = state.nfts[nft];
+  if (!house || to === state.turn || state.players[to]?.bankrupt) return state;
+  const priceN = Math.round(price);
+  if (priceN < 1) return state;
+  if (side === "sell" && house.owner !== state.turn) return state;
+  if (side === "buy" && house.owner !== to) return state;
+  const s = structuredClone(state) as State;
+  s.trade = { from: s.turn, to, nft, price: priceN, side };
+  s.phase = "trade";
+  const verb = side === "sell" ? "賣" : "買";
+  pushLog(s, `${actor(s).name} 向 ${s.players[to].name} 出價 ${money(priceN)} ${verb}${house.name}`);
+  return s;
+}
+
+export function resolveTrade(state: State, accept: boolean): State {
+  if (state.phase !== "trade" || !state.trade) return state;
+  const s = structuredClone(state) as State;
+  const t = s.trade!;
+  const house = s.nfts[t.nft];
+  const buyerSeat = t.side === "sell" ? t.to : t.from;
+  const sellerSeat = t.side === "sell" ? t.from : t.to;
+  s.trade = null;
+  s.phase = "need-roll";
+  if (!accept || !house || house.owner !== sellerSeat || s.players[buyerSeat].cash < t.price) {
+    pushLog(s, accept ? "這筆房交易沒有成交" : `${s.players[t.to].name} 拒絕了出價`);
+    return s;
+  }
+  s.players[buyerSeat].cash = r2(s.players[buyerSeat].cash - t.price);
+  s.players[sellerSeat].cash = r2(s.players[sellerSeat].cash + t.price);
+  house.owner = buyerSeat;
+  pushLog(s, `${s.players[buyerSeat].name} 以 ${money(t.price)} 買下${house.name}`);
+  return s;
+}
+
+export function aiTrade(s: State): boolean {
+  if (!s.trade) return false;
+  const t = s.trade;
+  const house = s.nfts[t.nft];
+  const book = Math.max(1, nftBook(house));
+  const buyer = s.players[t.side === "sell" ? t.to : t.from];
+  if (buyer.cash < t.price) return false;
+  if (t.side === "sell") return t.price <= book * 1.25;
+  return t.price >= book * 0.8;
+}
+
 export function applyOption(state: State, id: string): State {
   if (state.phase === "jail") {
     if (id !== "jail-pay") return state;
@@ -1109,11 +1199,11 @@ export function applyOption(state: State, id: string): State {
   if (op === "nft-up") {
     const tile = TILES[me.pos];
     const nft = s.nfts[tile.nft!];
-    const cost = upgradeCost(nft.level);
-    if (nft.owner !== s.turn || nft.level >= MAX_NFT_LEVEL || me.cash < cost) return state;
+    const cost = upgradeCost();
+    if (nft.owner !== s.turn || nft.level >= MAX_NFT_LEVEL || me.cash < cost || !ownsSet(s, s.turn, tile.nft!)) return state;
     me.cash = r2(me.cash - cost);
     nft.level += 1;
-    pushLog(s, `${me.name} 花 ${money(cost)} 把${nft.name}升到 ${nft.level} 級`);
+    pushLog(s, `${me.name} 花 ${money(cost)} 把${nft.name}升到第 ${nft.level} 等`);
     return settle(s);
   }
   if (op === "steal") {

@@ -2,7 +2,10 @@ import { useEffect, useRef, useState } from "react";
 import {
   COINS,
   COORDS,
+  RARITIES,
   TILES,
+  rarityOf,
+  nftBook,
   WIN,
   type Coin,
   type Candle,
@@ -99,7 +102,8 @@ export function FloorGame() {
       const t = setTimeout(() => useFloor.getState().step(), 120);
       return () => clearTimeout(t);
     }
-    const p = game.players[game.turn];
+    const seat = game.phase === "trade" && game.trade ? game.trade.to : game.turn;
+    const p = game.players[seat];
     if (p.human) return;
     const wait = game.phase === "need-roll" || game.phase === "steal-roll" ? 420 : game.phase === "card" ? 1100 : 760;
     const t = setTimeout(() => useFloor.getState().ai(), wait);
@@ -296,7 +300,8 @@ export function FloorGame() {
 
   const me = game.players[game.turn];
   const opts = currentOptions(game);
-  const human = game.turn === localSeat && me.human && !me.bankrupt;
+  const actorSeat = game.phase === "trade" && game.trade ? game.trade.to : game.turn;
+  const human = actorSeat === localSeat && game.players[actorSeat].human && !game.players[actorSeat].bankrupt;
   const last = game.hist[coin][game.hist[coin].length - 1]?.c ?? game.prices[coin];
   const up = game.prices[coin] >= last;
 
@@ -340,32 +345,23 @@ export function FloorGame() {
 
         {rules && (
           <section className="absolute inset-x-3 top-14 z-20 rounded-xl border border-line bg-surface p-4 text-sm leading-relaxed text-muted shadow-lg">
-            棋盤 40 格，順時針。每次擲三顆：兩顆點數骰相加走路，一顆空投骰只有 Free 會順便入帳。
-            踩到空投格則直接領幣。經過起點免費 20 USDT。房子別人踩到才收租。
-            盜錢包要兩顆點數骰合計 12。基本面和市場卡會罰款、發錢、改位置。淨值 10,000 USDT 即勝。
+            棋盤 40 格，順時針四排是 N、R、SR、SSR。租金是兩顆點數之和乘該等加成。集齊同一排才能花 150 USDT 升一等。擲骰前可以出價交易房子。
           </section>
         )}
 
-        <div className="grid min-h-0 flex-1 grid-cols-1 grid-rows-[minmax(0,1fr)_auto] gap-2">
-          <div className="board-slot min-h-0">
+        <div className="pit-grid">
+          <div className="zone-board board-slot min-h-0">
             <div className="board-frame">
               <Board game={game} />
             </div>
           </div>
-
-          <div className="side-dock flex min-h-0 flex-col gap-2 overflow-hidden">
+          <div className="zone-players min-h-0 overflow-hidden">
             <Roster game={game} onSteal={actPick} />
-            <Dock
-              game={game}
-              opts={opts}
-              human={human}
-              onRoll={actRoll}
-              onDismiss={actDismiss}
-              onPick={actPick}
-            />
-            <section className="hidden min-h-0 flex-1 flex-col rounded-2xl border border-line bg-surface p-3 lg:flex">
-              <div className="mb-1 flex items-end justify-between gap-2">
-                <p className={cx("font-mono text-lg", up ? "text-danger" : "text-primary")}>
+          </div>
+          <div className="zone-split min-h-0">
+            <section className="zone-chart flex min-h-0 flex-col rounded-2xl border border-line bg-surface p-2">
+              <div className="mb-1 flex items-center justify-between gap-1">
+                <p className={cx("font-mono text-sm", up ? "text-danger" : "text-primary")}>
                   {coin} {px(game.prices[coin])}
                 </p>
                 <div className="flex gap-1">
@@ -375,7 +371,7 @@ export function FloorGame() {
                       type="button"
                       onClick={() => setTf(n)}
                       className={cx(
-                        "h-8 rounded-lg px-2 font-mono text-[10px]",
+                        "h-7 rounded-md px-1.5 font-mono text-[10px]",
                         tf === n ? "bg-accent text-bg" : "border border-line text-muted",
                       )}
                     >
@@ -388,7 +384,7 @@ export function FloorGame() {
                       type="button"
                       onClick={() => setCoin(c)}
                       className={cx(
-                        "h-8 rounded-lg px-2 font-mono text-[10px]",
+                        "h-7 rounded-md px-1.5 font-mono text-[10px]",
                         c === coin ? "bg-primary text-bg" : "border border-line text-muted",
                       )}
                     >
@@ -401,13 +397,19 @@ export function FloorGame() {
                 <CandleChart game={game} coin={coin} bars={tf} />
               </div>
             </section>
-            <section className="hidden min-h-0 flex-1 overflow-y-auto rounded-2xl border border-line bg-surface p-3 font-mono text-xs leading-relaxed lg:block">
-              {game.log.map((line, i) => (
-                <p key={`${i}-${line}`} className={i === 0 ? "text-fg" : "text-muted"}>
-                  {line}
-                </p>
-              ))}
-            </section>
+            <div className="zone-action min-h-0 overflow-hidden">
+              <Dock
+                game={game}
+                opts={opts}
+                human={human}
+                onRoll={actRoll}
+                onDismiss={actDismiss}
+                onPick={actPick}
+              />
+            </div>
+          </div>
+          <div className="zone-hold min-h-0 overflow-hidden">
+            <Holdings game={game} seat={localSeat < 0 ? 0 : localSeat} />
           </div>
         </div>
       </div>
@@ -472,7 +474,10 @@ function Board({ game }: { game: State }) {
                 <span />
               )}
             </div>
-            <p className="tile-name">{tile.label}</p>
+            <p className="tile-name">
+              {tile.kind === "nft" && tile.nft !== undefined ? `${RARITIES[Math.floor(tile.nft / 3)]} ` : ""}
+              {tile.label}
+            </p>
             <div className="flex h-3 items-end gap-0.5">
               {here.map((p) => (
                 <span key={p.id} className={cx("pawn", `tok-${game.players.indexOf(p)}`, p.jailed && "pawn-jail")} title={p.name} />
@@ -717,6 +722,99 @@ function Die({ value }: { value: number }) {
   );
 }
 
+function Holdings({ game, seat }: { game: State; seat: number }) {
+  const p = game.players[seat];
+  const houses = game.nfts
+    .map((n, i) => (n.owner === seat ? `${rarityOf(i)}${n.name}${n.level}` : null))
+    .filter(Boolean)
+    .join(" ");
+  return (
+    <section className="flex h-full flex-col justify-center rounded-2xl border border-line bg-surface px-3 py-2">
+      <p className="text-xs text-muted">{p?.name} · 持倉</p>
+      <p className="font-mono text-sm">USDT {money(p?.cash ?? 0)}</p>
+      <p className="truncate font-mono text-[11px] text-muted">
+        {COINS.map((c) => `${c} ${qty(p?.bags[c] ?? 0)}`).join("  ")}
+      </p>
+      <p className="truncate text-[11px] text-muted">{houses || "沒有 NFT 房"}</p>
+    </section>
+  );
+}
+
+function TradeForm({ game, onPick }: { game: State; onPick: (id: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const [side, setSide] = useState<"sell" | "buy">("sell");
+  const [picked, setPicked] = useState(0);
+  const [buyer, setBuyer] = useState(-1);
+  const mine = game.nfts.map((n, i) => ({ n, i })).filter((x) => x.n.owner === game.turn);
+  const others = game.nfts
+    .map((n, i) => ({ n, i }))
+    .filter((x) => x.n.owner !== null && x.n.owner !== game.turn && !game.players[x.n.owner!].bankrupt);
+  const list = side === "sell" ? mine : others;
+  const house = list.find((x) => x.i === picked) ?? list[0];
+  const book = house ? Math.max(40, Math.round(nftBook(house.n))) : 40;
+  const [price, setPrice] = useState(book);
+  const rivals = game.players.map((p, i) => ({ p, i })).filter((x) => x.i !== game.turn && !x.p.bankrupt);
+  const to = side === "buy" ? (house?.n.owner ?? -1) : (rivals.find((r) => r.i === buyer)?.i ?? rivals[0]?.i ?? -1);
+  if (!open) {
+    return (
+      <button type="button" onClick={() => setOpen(true)} className="mt-2 h-9 w-full rounded-lg border border-line text-sm">
+        交易房子
+      </button>
+    );
+  }
+  return (
+    <div className="mt-2 rounded-xl border border-line bg-surface-2 p-2">
+      <div className="grid grid-cols-2 gap-1">
+        <button type="button" onClick={() => setSide("sell")} className={cx("h-8 rounded-lg text-xs", side === "sell" ? "bg-primary text-bg" : "border border-line")}>
+          賣出
+        </button>
+        <button type="button" onClick={() => setSide("buy")} className={cx("h-8 rounded-lg text-xs", side === "buy" ? "bg-primary text-bg" : "border border-line")}>
+          買入
+        </button>
+      </div>
+      <select
+        value={house?.i ?? ""}
+        onChange={(e) => setPicked(Number(e.target.value))}
+        className="mt-2 h-8 w-full rounded-lg border border-line bg-bg px-1 text-xs"
+      >
+        {list.map((x) => (
+          <option key={x.i} value={x.i}>
+            {rarityOf(x.i)} {x.n.name} 第{x.n.level}等
+          </option>
+        ))}
+      </select>
+      {side === "sell" && rivals.length > 1 ? (
+        <select value={to} onChange={(e) => setBuyer(Number(e.target.value))} className="mt-1 h-8 w-full rounded-lg border border-line bg-bg px-1 text-xs">
+          {rivals.map((r) => (
+            <option key={r.i} value={r.i}>
+              賣給 {r.p.name}
+            </option>
+          ))}
+        </select>
+      ) : null}
+      <input
+        type="range"
+        min={10}
+        max={Math.max(40, book * 2)}
+        step={10}
+        value={Math.min(price, Math.max(40, book * 2))}
+        onChange={(e) => setPrice(Number(e.target.value))}
+        className="mt-2 w-full accent-[#3ee0a0]"
+        aria-label="出價"
+      />
+      <p className="font-mono text-[10px] text-muted">{price} USDT{to >= 0 ? ` · 給 ${game.players[to].name}` : ""}</p>
+      <button
+        type="button"
+        disabled={!house || to < 0}
+        onClick={() => house && to >= 0 && onPick(`offer:${to}:${house.i}:${price}:${side}`)}
+        className="mt-1 h-9 w-full rounded-lg bg-accent text-sm font-medium text-bg disabled:opacity-40"
+      >
+        出價
+      </button>
+    </div>
+  );
+}
+
 function Dock({
   game,
   opts,
@@ -734,7 +832,7 @@ function Dock({
 }) {
   const me = game.players[game.turn];
   return (
-    <section className="rounded-2xl border border-line bg-surface p-3">
+    <section className="h-full overflow-y-auto rounded-2xl border border-line bg-surface p-3">
       {game.phase === "card" && game.card && (
         <div>
           <h2 className="text-lg font-medium">{game.card.title}</h2>
@@ -827,6 +925,28 @@ function Dock({
         </div>
       )}
 
+      {game.phase === "trade" && game.trade && (
+        <div>
+          <h2 className="text-sm font-medium">房子出價</h2>
+          <p className="mt-1 text-sm leading-relaxed text-muted">
+            {game.players[game.trade.from].name} 想用 {money(game.trade.price)} USDT
+            {game.trade.side === "sell" ? "賣出" : "買入"}
+            {game.nfts[game.trade.nft]?.name}。
+            {human ? "接受或拒絕。" : `${game.players[game.trade.to].name} 在考慮。`}
+          </p>
+          {human ? (
+            <div className="mt-2 grid grid-cols-2 gap-2">
+              <button type="button" onClick={() => onPick("trade-yes")} className="h-11 rounded-xl bg-primary font-medium text-bg">
+                接受
+              </button>
+              <button type="button" onClick={() => onPick("trade-no")} className="h-11 rounded-xl border border-line">
+                拒絕
+              </button>
+            </div>
+          ) : null}
+        </div>
+      )}
+
       {(game.phase === "need-roll" || game.phase === "moving" || game.phase === "steal-roll") && (
         <div>
           <p className="text-sm text-muted">
@@ -840,6 +960,7 @@ function Dock({
                   ? "擲三顆：兩顆顯示 1 到 6。點數相同就再擲一次。"
                   : `${me.name} 準備擲骰。`}
           </p>
+          {human && game.phase === "need-roll" ? <TradeForm game={game} onPick={onPick} /> : null}
           {human && (game.phase === "need-roll" || game.phase === "steal-roll") ? (
             <button
               type="button"
@@ -867,7 +988,7 @@ function Roster({ game, onSteal }: { game: State; onSteal: (id: string) => void 
     TILES[game.players[game.turn].pos].kind === "steal" &&
     game.players[game.turn].human;
   return (
-    <div className="grid grid-cols-4 gap-1 lg:grid-cols-2">
+    <div className="grid h-full grid-cols-2 grid-rows-2 gap-1">
       {game.players.map((p, i) => {
         const net = netWorth(game, i);
         const pct = Math.max(0, Math.min(100, (net / WIN) * 100));
@@ -903,11 +1024,13 @@ function Roster({ game, onSteal }: { game: State; onSteal: (id: string) => void 
                 .filter(Boolean)
                 .join(" · ") || "沒有持倉"}
             </p>
-            <p className="hidden truncate text-[11px] text-muted lg:block">
-              {game.nfts
-                .filter((n) => n.owner === i)
-                .map((n) => `${n.name}${n.level}`)
-                .join(" ") || "沒有 NFT 房"}
+            <p className="mt-1 truncate font-mono text-[10px] text-muted">
+              {RARITIES.map((r) => {
+                const owned = game.nfts.filter((n, idx) => n.owner === i && rarityOf(idx) === r).length;
+                return owned ? `${r}${owned}` : null;
+              })
+                .filter(Boolean)
+                .join(" ") || "無房"}
             </p>
             {can && (
               <button

@@ -31,18 +31,47 @@
   }
 }
 
+.pit-grid {
+  display: grid;
+  min-height: 0;
+  flex: 1;
+  gap: 0.4rem;
+  grid-template-columns: minmax(0, 1.35fr) minmax(0, 0.72fr) minmax(0, 0.9fr);
+  grid-template-rows: minmax(0, 1fr) minmax(6.5rem, 0.58fr);
+  grid-template-areas:
+    "board players chart"
+    "action hold hold";
+}
+
+.zone-board { grid-area: board; }
+.zone-players { grid-area: players; }
+.zone-chart { grid-area: chart; }
+.zone-action { grid-area: action; }
+.zone-hold { grid-area: hold; }
+.zone-split { display: contents; }
+
 @media (min-width: 1024px) {
-  .play-shell {
-    padding-right: 23rem;
+  .pit-grid {
+    grid-template-columns: minmax(0, 1fr) minmax(20rem, 26rem);
+    grid-template-rows: minmax(0, 0.86fr) minmax(0, 1fr);
+    grid-template-areas:
+      "board players"
+      "board split";
   }
 
-  .side-dock {
-    position: fixed;
-    top: 3.1rem;
-    right: 0.6rem;
-    bottom: 0.5rem;
-    z-index: 15;
-    width: 22rem;
+  .zone-split {
+    display: grid;
+    grid-area: split;
+    min-height: 0;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.4rem;
+  }
+
+  .zone-hold { display: none; }
+  .zone-chart,
+  .zone-action {
+    grid-area: auto;
+    min-height: 0;
   }
 }
 
