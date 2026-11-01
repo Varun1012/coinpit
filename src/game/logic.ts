@@ -9,6 +9,7 @@ export const FEE = 0.025;
 export const BOARD = 40;
 export const STEAL_AT = 30;
 export const MAX_NFT_LEVEL = 6;
+export const JAIL_FINE = 50;
 
 /** 升到下一級的價錢。一級升二級 150，之後每級再加 150。 */
 export function upgradeCost(level: number): number {
@@ -29,6 +30,12 @@ export type Player = {
   miner: boolean;
   pos: number;
   bankrupt: boolean;
+  /** 這一輪連續擲出相同點數的次數。 */
+  doubles: number;
+  /** 在空投坐牢。坐牢時踩空投沒有獎勵。 */
+  jailed: boolean;
+  /** 坐牢後已經擲過、但沒有擲出相同點數的次數。滿 3 次就只能交罰款。 */
+  jailTries: number;
 };
 
 export type Nft = {
@@ -116,7 +123,7 @@ function buildCoords(): ReadonlyArray<readonly [number, number]> {
 }
 
 export type Candle = { t: number; o: number; h: number; l: number; c: number };
-export type Phase = "need-roll" | "moving" | "need-choice" | "card" | "steal-roll" | "over";
+export type Phase = "need-roll" | "moving" | "need-choice" | "card" | "steal-roll" | "jail" | "over";
 export type Card = {
   title: string;
   body: string;
@@ -158,6 +165,8 @@ export type State = {
   winner: number | null;
   winReason: WinReason;
   tick: number;
+  /** 兩顆點數相同，這一回合收完線之後再擲一次。 */
+  extraTurn: boolean;
 };
 
 export function money(n: number): string {
@@ -298,6 +307,9 @@ export function createGame(): State {
       miner: false,
       pos: 0,
       bankrupt: false,
+      doubles: 0,
+      jailed: false,
+      jailTries: 0,
     },
     {
       id: "north",
@@ -309,6 +321,9 @@ export function createGame(): State {
       miner: false,
       pos: 0,
       bankrupt: false,
+      doubles: 0,
+      jailed: false,
+      jailTries: 0,
     },
     {
       id: "mm",
@@ -320,6 +335,9 @@ export function createGame(): State {
       miner: false,
       pos: 0,
       bankrupt: false,
+      doubles: 0,
+      jailed: false,
+      jailTries: 0,
     },
     {
       id: "whale",
@@ -331,6 +349,9 @@ export function createGame(): State {
       miner: false,
       pos: 0,
       bankrupt: false,
+      doubles: 0,
+      jailed: false,
+      jailTries: 0,
     },
   ];
   return {
@@ -366,13 +387,14 @@ export function createGame(): State {
     feePot: 0,
     log: [
       "盤口開啟。四人各持 150 USDT。恐貪 50（越高越貪婪）、流動性居中。淨值先到 10,000，或讓其餘三人破產。",
-      "每次擲三顆：兩顆點數骰走路，一顆空投骰。踩到空投直接領。盜錢包要兩顆合計 12 點。",
+      "每次擲三顆：兩顆點數骰顯示 1 到 6，一顆空投骰。兩顆相同就再擲一次。連續三次相同，送到空投坐牢。",
     ],
     card: null,
     choiceHint: "",
     winner: null,
     winReason: null,
     tick: 15,
+    extraTurn: false,
   };
 }
 
@@ -382,25 +404,114 @@ function actor(s: State): Player {
 
 export function roll(state: State): State {
   if (state.players[state.turn].bankrupt) return state;
+  if (state.phase === "jail") return rollJail(state);
   if (state.phase === "steal-roll") return rollStealPair(state);
   if (state.phase !== "need-roll") return state;
   const s = structuredClone(state) as State;
-  const a = 1 + Math.floor(Math.random() * 6);
-  const b = 1 + Math.floor(Math.random() * 6);
-  const air = 1 + Math.floor(Math.random() * 6);
+  const a = die();
+  const b = die();
+  const air = die();
   s.faces = [a, b];
   s.airFace = air;
   s.dice = a + b;
-  s.stepsLeft = a + b;
-  s.phase = "moving";
   const me = actor(s);
-  const word = air === 1 ? "Free" : "X";
   if (air === 1) {
     const drop = giveCoins(s, me);
     pushLog(s, `${me.name} 擲出 ${a} 與 ${b}，空投骰 Free，入帳 ${qty(drop.q)} ${drop.c}`);
   } else {
     pushLog(s, `${me.name} 擲出 ${a} 與 ${b}，空投骰 X`);
   }
+  if (a === b) {
+    me.doubles += 1;
+    if (me.doubles >= 3) return sendToJail(s, me);
+    s.extraTurn = true;
+    pushLog(s, `${me.name} 兩顆都是 ${a}，連續第 ${me.doubles} 次，這回合後再擲一次`);
+  } else {
+    me.doubles = 0;
+    s.extraTurn = false;
+  }
+  s.stepsLeft = a + b;
+  s.phase = "moving";
+  return s;
+}
+
+function die(): number {
+  return 1 + Math.floor(Math.random() * 6);
+}
+
+function airIndex(): number {
+  const i = TILES.findIndex((t) => t.kind === "air");
+  return i < 0 ? 10 : i;
+}
+
+function sendToJail(s: State, me: Player): State {
+  me.pos = airIndex();
+  me.jailed = true;
+  me.jailTries = 0;
+  me.doubles = 0;
+  s.extraTurn = false;
+  s.stepsLeft = 0;
+  s.card = {
+    title: "連續三次相同 · 空投坐牢",
+    body: `${me.name} 連續三次擲出相同點數，直接送到空投。坐牢期間不能領空投。有 3 次機會擲兩顆普通骰，點數相同就離開；也可以交 ${money(JAIL_FINE)} USDT 罰款。用完 3 次就只能交罰款。`,
+    mode: "info",
+  };
+  s.phase = "card";
+  pushLog(s, `${me.name} 連續三次點數相同，送到空投坐牢`);
+  return s;
+}
+
+function rollJail(state: State): State {
+  const me0 = state.players[state.turn];
+  if (me0.jailTries >= 3) return state;
+  const s = structuredClone(state) as State;
+  const me = actor(s);
+  const a = die();
+  const b = die();
+  s.faces = [a, b];
+  s.airFace = 0;
+  s.dice = a + b;
+  if (a === b) {
+    me.jailed = false;
+    me.jailTries = 0;
+    me.doubles = 1;
+    s.extraTurn = true;
+    s.stepsLeft = a + b;
+    s.phase = "moving";
+    pushLog(s, `${me.name} 擲出 ${a} 與 ${b}，點數相同，離開空投`);
+    return s;
+  }
+  me.jailTries += 1;
+  s.extraTurn = false;
+  const left = 3 - me.jailTries;
+  pushLog(
+    s,
+    left > 0
+      ? `${me.name} 擲出 ${a} 與 ${b}，不相同，還有 ${left} 次機會`
+      : `${me.name} 擲出 ${a} 與 ${b}，三次機會用完，只能交罰款`,
+  );
+  return settle(s);
+}
+
+function releaseByFine(s: State): State {
+  const me = actor(s);
+  const due = r2(Math.min(me.cash, JAIL_FINE));
+  me.cash = r2(me.cash - due);
+  me.jailed = false;
+  me.jailTries = 0;
+  me.doubles = 0;
+  s.extraTurn = false;
+  s.phase = "need-roll";
+  s.choiceHint = "";
+  s.dice = 0;
+  s.faces = [0, 0];
+  s.airFace = 0;
+  pushLog(
+    s,
+    due >= JAIL_FINE
+      ? `${me.name} 交罰款 ${money(due)} USDT，離開空投`
+      : `${me.name} 交出全部 ${money(due)} USDT 當罰款，離開空投`,
+  );
   return s;
 }
 
@@ -414,8 +525,8 @@ function giveCoins(s: State, me: Player): { c: Coin; q: number; value: number } 
 
 function rollStealPair(state: State): State {
   const s = structuredClone(state) as State;
-  const a = 1 + Math.floor(Math.random() * 6);
-  const b = 1 + Math.floor(Math.random() * 6);
+  const a = die();
+  const b = die();
   s.faces = [a, b];
   s.airFace = 0;
   s.dice = a + b;
@@ -491,6 +602,15 @@ function land(s: State): State {
     return s;
   }
   if (tile.kind === "air") {
+    if (me.jailed) {
+      s.card = {
+        title: "空投 · 坐牢",
+        body: `${me.name} 還在空投坐牢，這格沒有空投。擲出相同點數，或交 ${money(JAIL_FINE)} USDT 才能離開。`,
+        mode: "info",
+      };
+      s.phase = "card";
+      return s;
+    }
     const drop = giveCoins(s, me);
     s.card = {
       title: "空投",
@@ -752,6 +872,7 @@ function nudge(s: State, c: Coin, notional: number, sign: number) {
 }
 
 export function currentOptions(s: State): Opt[] {
+  if (s.phase === "jail") return jailOptions(s);
   if (s.phase !== "need-choice") return [];
   const me = actor(s);
   const tile = TILES[me.pos];
@@ -761,6 +882,28 @@ export function currentOptions(s: State): Opt[] {
   if (tile.kind === "spot" && tile.coin) return spotOptions(s, tile.coin);
   if (tile.kind === "p2p") return p2pOptions(s);
   return [{ id: "skip", label: "繼續", detail: "去收線", tone: "primary" }];
+}
+
+function jailOptions(s: State): Opt[] {
+  const me = actor(s);
+  const due = r2(Math.min(me.cash, JAIL_FINE));
+  const opts: Opt[] = [
+    {
+      id: "jail-pay",
+      label: me.cash >= JAIL_FINE ? `交罰款 ${money(JAIL_FINE)}` : `交出 ${money(due)} 離開`,
+      detail: me.jailTries >= 3 ? "三次用完，只能交罰款" : "付完就擲骰走路",
+      tone: "danger",
+    },
+  ];
+  if (me.jailTries < 3) {
+    opts.push({
+      id: "jail-roll",
+      label: "擲兩顆",
+      detail: `還有 ${3 - me.jailTries} 次，點數相同就離開`,
+      tone: "primary",
+    });
+  }
+  return opts;
 }
 
 function stealOptions(s: State): Opt[] {
@@ -920,6 +1063,10 @@ function richestOther(s: State): Player | null {
 }
 
 export function applyOption(state: State, id: string): State {
+  if (state.phase === "jail") {
+    if (id !== "jail-pay") return state;
+    return releaseByFine(structuredClone(state) as State);
+  }
   if (state.phase !== "need-choice") return state;
   const s0 = state;
   const me0 = s0.players[s0.turn];
@@ -1209,6 +1356,18 @@ function settle(s: State): State {
   payYields(s);
   markBankrupt(s);
   if (detectWin(s)) return s;
+  if (s.extraTurn && !actor(s).bankrupt && !actor(s).jailed) {
+    s.extraTurn = false;
+    s.phase = "need-roll";
+    s.choiceHint = "";
+    s.dice = 0;
+    s.faces = [0, 0];
+    s.airFace = 0;
+    s.stealHits = 0;
+    pushLog(s, `${actor(s).name} 點數相同，再擲一次`);
+    return s;
+  }
+  s.extraTurn = false;
   advance(s);
   return s;
 }
@@ -1296,17 +1455,19 @@ function detectWin(s: State): boolean {
 
 function advance(s: State) {
   const prev = s.turn;
+  s.players[prev].doubles = 0;
   for (let k = 1; k <= 4; k++) {
     const i = (prev + k) % 4;
     if (!s.players[i].bankrupt) {
       s.turn = i;
       if (i <= prev) s.round += 1;
-      s.phase = "need-roll";
+      s.phase = s.players[i].jailed ? "jail" : "need-roll";
       s.choiceHint = "";
       s.dice = 0;
       s.faces = [0, 0];
       s.airFace = 0;
       s.stealHits = 0;
+      s.extraTurn = false;
       return;
     }
   }

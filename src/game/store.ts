@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import * as L from "./logic";
 
-const KEY = "coinpit-v6";
+const KEY = "coinpit-v7";
 
 type Store = {
   game: L.State | null;
@@ -100,7 +100,12 @@ export const useFloor = create<Store>((set, get) => ({
     if (p.human || p.bankrupt) return;
     let next = g;
     if (g.phase === "need-roll" || g.phase === "steal-roll") next = L.roll(g);
-    else if (g.phase === "card") next = L.dismissCard(g);
+    else if (g.phase === "jail") {
+      const me = g.players[g.turn];
+      const mustPay = me.jailTries >= 3;
+      const payEarly = me.cash >= L.JAIL_FINE && me.style !== "whale" && me.jailTries >= 1;
+      next = mustPay || payEarly ? L.applyOption(g, "jail-pay") : L.roll(g);
+    } else if (g.phase === "card") next = L.dismissCard(g);
     else if (g.phase === "need-choice") {
       const opts = L.currentOptions(g);
       next = L.applyOption(g, L.aiPick(g, opts));

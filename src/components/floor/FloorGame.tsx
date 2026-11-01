@@ -151,7 +151,7 @@ export function FloorGame() {
       if (!g) return;
       const mine = net ? (net.host ? 0 : online.mySeat) : 0;
       if (g.turn !== mine || !g.players[g.turn].human) return;
-      if (g.phase === "need-roll" || g.phase === "steal-roll") {
+      if (g.phase === "need-roll" || g.phase === "steal-roll" || (g.phase === "jail" && g.players[g.turn].jailTries < 3)) {
         e.preventDefault();
         actRoll();
       } else if (g.phase === "card") {
@@ -222,7 +222,7 @@ export function FloorGame() {
               起點在右下，空投在左下。踩到空投就直接領幣。每經過起點免費 20 USDT。
             </li>
             <li className="rounded-xl border border-line bg-surface px-3 py-3">
-              每次擲三顆：兩顆點數骰走路，一顆空投骰（Free 會順便入帳，X 就沒有）。右上角盜錢包要兩顆點數骰合計 12 才能盜 50% USDT。
+              每次擲三顆：兩顆點數骰顯示 1 到 6，一顆空投骰。兩顆相同就再擲一次。連續三次相同，送到空投坐牢，不能領空投。
             </li>
             <li className="rounded-xl border border-line bg-surface px-3 py-3">
               房子一級過路費擲一顆骰，1–6 USDT。每升一級多一顆骰。升到二級要 150 USDT，之後每級再加 150。
@@ -475,7 +475,7 @@ function Board({ game }: { game: State }) {
             <p className="tile-name">{tile.label}</p>
             <div className="flex h-3 items-end gap-0.5">
               {here.map((p) => (
-                <span key={p.id} className={cx("pawn", `tok-${game.players.indexOf(p)}`)} title={p.name} />
+                <span key={p.id} className={cx("pawn", `tok-${game.players.indexOf(p)}`, p.jailed && "pawn-jail")} title={p.name} />
               ))}
             </div>
           </div>
@@ -499,6 +499,8 @@ function Board({ game }: { game: State }) {
                 ? `${meName(game)} 移動中`
                 : game.phase === "steal-roll"
                   ? `${meName(game)} 要擲出 12`
+                  : game.phase === "jail"
+                  ? `${meName(game)} 在空投坐牢`
                   : `${meName(game)} 的回合`}
           </p>
           <p className="text-center font-mono text-[11px] text-[#1f6b45]">
@@ -698,19 +700,6 @@ function WordDie({ face }: { face: number }) {
 }
 
 function Die({ value }: { value: number }) {
-  const pip = (on: boolean) => (
-    <span className={cx("h-1.5 w-1.5 rounded-full", on ? "bg-[#1c140c]" : "bg-transparent")} />
-  );
-  const n = value || 1;
-  const map: Record<number, boolean[]> = {
-    1: [false, false, false, false, true, false, false, false, false],
-    2: [true, false, false, false, false, false, false, false, true],
-    3: [true, false, false, false, true, false, false, false, true],
-    4: [true, false, true, false, false, false, true, false, true],
-    5: [true, false, true, false, true, false, true, false, true],
-    6: [true, false, true, true, false, true, true, false, true],
-  };
-  const cells = map[n] ?? map[1];
   const [spin, setSpin] = useState(false);
   useEffect(() => {
     if (!value) return;
@@ -720,12 +709,10 @@ function Die({ value }: { value: number }) {
   }, [value]);
   return (
     <div
-      className={cx("die grid grid-cols-3 grid-rows-3 place-items-center p-1.5", spin && "die-spin", value === 0 && "opacity-35")}
-      aria-label={value ? `骰子 ${value} 點` : "尚未擲骰"}
+      className={cx("die flex items-center justify-center", spin && "die-spin", value === 0 && "opacity-35")}
+      aria-label={value ? `骰子 ${value}` : "尚未擲骰"}
     >
-      {cells.map((on, i) => (
-        <span key={i}>{pip(value !== 0 && on)}</span>
-      ))}
+      <span className="font-mono text-xl font-bold leading-none text-[#1c140c]">{value || ""}</span>
     </div>
   );
 }
@@ -808,6 +795,38 @@ function Dock({
         </div>
       )}
 
+      {game.phase === "jail" && (
+        <div>
+          <h2 className="text-sm font-medium">空投 · 坐牢</h2>
+          <p className="mt-1 text-sm leading-relaxed text-muted">
+            {me.jailTries >= 3
+              ? "三次機會用完，只能交 50 USDT 罰款。"
+              : `不能領空投。還有 ${3 - me.jailTries} 次機會：擲出相同點數就離開，或直接交 50 USDT。`}
+          </p>
+          {human ? (
+            <div className="mt-2 grid grid-cols-2 gap-2">
+              {opts.map((o) => (
+                <button
+                  key={o.id}
+                  type="button"
+                  onClick={() => (o.id === "jail-roll" ? onRoll() : onPick(o.id))}
+                  className={cx(
+                    "min-h-11 rounded-xl px-3 py-2 text-left",
+                    o.tone === "primary" && "bg-primary text-bg",
+                    o.tone === "danger" && "bg-accent text-bg",
+                  )}
+                >
+                  <span className="block text-sm font-medium">{o.label}</span>
+                  <span className="block text-xs text-bg/80">{o.detail}</span>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <p className="mt-3 font-mono text-xs text-muted">{me.name} 在想要不要交罰款</p>
+          )}
+        </div>
+      )}
+
       {(game.phase === "need-roll" || game.phase === "moving" || game.phase === "steal-roll") && (
         <div>
           <p className="text-sm text-muted">
@@ -818,7 +837,7 @@ function Dock({
                   ? "停在盜錢包。擲兩顆點數骰，合計 12 才能盜。"
                   : `${me.name} 在擲盜錢包。`
                 : human
-                  ? "擲三顆：兩顆點數骰走路，一顆空投骰。"
+                  ? "擲三顆：兩顆顯示 1 到 6。點數相同就再擲一次。"
                   : `${me.name} 準備擲骰。`}
           </p>
           {human && (game.phase === "need-roll" || game.phase === "steal-roll") ? (
